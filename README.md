@@ -107,7 +107,14 @@ spends 2 per iteration plus one final evaluation.
 The table below is produced by `configs/benchmark_fake_guadalupe.toml` (`aer_noisy` on
 `FakeGuadalupeV2`, heavy-hex loop layout).
 
-<!-- FAKE_GUADALUPE_TABLE -->
+Seed 42, 1024 shots, heavy-hex loop layout, `x0 = 0.3 * rand`; SPSA 50 iterations (`lr = 0.05`, `perturbation = 0.1`), ADAM 30 iterations (`lr = 0.05`, `fd_eps = 0.1`).
+
+| run | ansatz | optimizer | final E | best E | exact E | rel. err (best) | evaluations | time (s) |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| rvb_spsa | rvb | spsa | -13.8629 | -14.0130 | -18.0000 | 22.150 % | 101 | 265.4 |
+| rvb_adam | rvb | adam | -10.7637 | -14.0785 | -18.0000 | 21.786 % | 391 | 978.3 |
+| hva_spsa | hva | spsa | -13.9971 | -13.9971 | -18.0000 | 22.238 % | 101 | 262.9 |
+| hva_adam | hva | adam | -13.9981 | -14.0973 | -18.0000 | 21.682 % | 91 | 229.1 |
 
 Without error mitigation the noisy energies sit far above -18: the transpiled circuits carry
 66 (HVA) to 93 (RVB) CX gates on Guadalupe-era error rates. That gap, not the noiseless
