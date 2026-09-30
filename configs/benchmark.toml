@@ -1,0 +1,32 @@
+# The paper's four combinations (RVB / HVA x SPSA / ADAM) with identical hyperparameters.
+# Default backend is the exact statevector; switch with
+#   kagome-vqe benchmark --backend-override aer_noisy:FakeGuadalupeV2
+#   kagome-vqe benchmark --backend-override fake:FakeSherbrooke --set backend.shots=2048
+name = "benchmark"
+seed = 42
+x0_scale = 0.7853981633974483
+record_params = false
+
+[lattice]
+site_order = "hamiltonian_cycle"
+
+[backend]
+kind = "statevector"
+shots = 4096
+optimization_level = 3
+
+[[combos]]
+ansatz = { type = "rvb" }
+optimizer = { type = "spsa", maxiter = 100, lr = 0.01, perturbation = 0.01 }
+
+[[combos]]
+ansatz = { type = "rvb" }
+optimizer = { type = "adam", maxiter = 100, lr = 0.01 }
+
+[[combos]]
+ansatz = { type = "hva" }
+optimizer = { type = "spsa", maxiter = 100, lr = 0.01, perturbation = 0.01 }
+
+[[combos]]
+ansatz = { type = "hva" }
+optimizer = { type = "adam", maxiter = 100, lr = 0.01 }

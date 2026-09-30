@@ -1,0 +1,37 @@
+# The four combinations on a noisy simulation of ibmq_guadalupe (Aer + the fake backend's
+# calibration data). Hyperparameters differ from benchmark.toml on purpose:
+#   * ADAM's finite-difference step must be large compared with shot noise (fd_eps = 0.1);
+#   * SPSA's perturbation likewise (0.1), with a larger step so 50 iterations get somewhere;
+#   * maxiter is halved because every evaluation costs a few seconds of noisy simulation.
+# Expect energies well above -18: with ~66-93 CX gates on Guadalupe-era error rates the noisy
+# floor is around -13 to -14 without error mitigation. That gap is the point of this benchmark.
+name = "fake_guadalupe"
+seed = 42
+x0_scale = 0.3
+record_params = false
+
+[lattice]
+site_order = "hamiltonian_cycle"
+
+[backend]
+kind = "aer_noisy"
+name = "FakeGuadalupeV2"
+shots = 4096
+optimization_level = 3
+initial_layout = [1, 2, 3, 5, 8, 11, 14, 13, 12, 10, 7, 4]
+
+[[combos]]
+ansatz = { type = "rvb" }
+optimizer = { type = "spsa", maxiter = 50, lr = 0.05, perturbation = 0.1 }
+
+[[combos]]
+ansatz = { type = "rvb" }
+optimizer = { type = "adam", maxiter = 50, lr = 0.05, fd_eps = 0.1 }
+
+[[combos]]
+ansatz = { type = "hva" }
+optimizer = { type = "spsa", maxiter = 50, lr = 0.05, perturbation = 0.1 }
+
+[[combos]]
+ansatz = { type = "hva" }
+optimizer = { type = "adam", maxiter = 50, lr = 0.05, fd_eps = 0.1 }

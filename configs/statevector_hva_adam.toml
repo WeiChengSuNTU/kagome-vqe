@@ -1,0 +1,24 @@
+# HVA + ADAM on the exact statevector simulator: the paper's best combination, noiseless.
+# With the default Hamiltonian-cycle site order the exact ground state sits at all-zero
+# parameters, so this mostly tests that the optimiser walks back from a random start.
+name = "statevector_hva_adam"
+seed = 42
+x0_scale = 0.7853981633974483   # pi / 4, as in the original notebook
+
+[lattice]
+kind = "kagome_unit_cell"
+t = 1.0
+site_order = "hamiltonian_cycle"
+
+[ansatz]
+type = "hva"
+reps = 1
+
+[optimizer]
+type = "adam"
+maxiter = 100
+lr = 0.01
+fd_eps = 1e-6          # exact energies: tiny finite-difference step is fine
+
+[backend]
+kind = "statevector"

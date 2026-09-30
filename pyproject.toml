@@ -1,0 +1,175 @@
+[project]
+name = "kagome-vqe"
+version = "0.1.0"
+description = "Variational quantum eigensolver for the spin-1/2 Heisenberg antiferromagnet on the kagome lattice (Qiskit 2.x, IBM Quantum ready)."
+readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+requires-python = ">=3.12"
+authors = [{ name = "VQE-Kagome contributors" }]
+keywords = ["qiskit", "vqe", "kagome", "heisenberg", "quantum-computing"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Science/Research",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
+  "Topic :: Scientific/Engineering :: Physics",
+  "Typing :: Typed",
+]
+dependencies = [
+  "qiskit>=2.5,<3",
+  "qiskit-ibm-runtime>=0.50,<0.51",
+  "qiskit-aer>=0.17.2",
+  "rustworkx>=0.18",
+  "numpy>=2.3",
+  "scipy>=1.16",
+  "pandas>=3",
+  "matplotlib>=3.10",
+  "typer>=0.27",
+  "pydantic>=2.12",
+  "pydantic-settings>=2.12",
+  "rich>=14",
+  "python-dotenv>=1.1",
+  "tomli-w>=1.2",
+]
+
+[project.urls]
+Repository = "https://github.com/victorwk93812/VQE-Kagome"
+"Original challenge" = "https://github.com/qiskit-community/open-science-prize-2022"
+
+[project.scripts]
+kagome-vqe = "kagome_vqe.cli:app"
+
+[dependency-groups]
+dev = [
+  "ruff>=0.16",
+  "mypy>=2.3",
+  "pytest>=9",
+  "pytest-cov>=7",
+  "pytest-xdist>=3.8",
+  "hypothesis>=6.150",
+  "pre-commit>=4.5",
+  "nbstripout>=0.9",
+  "pandas-stubs",
+  "types-requests",
+]
+notebooks = ["jupyterlab>=4.4", "ipykernel>=6.30", "nbmake>=1.5"]
+
+[build-system]
+requires = ["uv_build>=0.12,<0.13"]
+build-backend = "uv_build"
+
+[tool.uv]
+default-groups = ["dev"]
+
+# --------------------------------------------------------------------------------------------
+# Ruff: linter + formatter. Rules are documented in docs/STYLE.md.
+# --------------------------------------------------------------------------------------------
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src", "tests"]
+extend-exclude = ["references", "notebooks"]
+
+[tool.ruff.lint]
+select = [
+  "E", "F", "W",   # pycodestyle / pyflakes
+  "I",             # isort
+  "N",             # pep8-naming
+  "UP",            # pyupgrade
+  "B",             # bugbear
+  "C4",            # comprehensions
+  "SIM",           # simplify
+  "PT",            # pytest style
+  "RUF",           # ruff-specific
+  "D",             # pydocstyle
+  "ANN",           # annotations
+  "NPY",           # numpy
+  "PERF",          # performance
+  "PL",            # pylint
+  "T20",           # no print() outside the CLI
+  "TID",           # tidy imports
+]
+ignore = [
+  "D203",    # one-blank-line-before-class (conflicts with D211)
+  "D213",    # multi-line-summary-second-line (conflicts with D212)
+  "PLR0913", # too many arguments: scientific configs legitimately have many knobs
+  "PLR2004", # magic values: physics constants and small ints are fine with a comment
+  "ANN401",  # Any in **kwargs passthroughs
+  "N806",    # uppercase variable names such as H for a Hamiltonian
+  "PLR0917", # too many positional arguments: same reason as PLR0913
+  "PLC0415", # imports inside functions: deliberate for the heavy/optional Qiskit stack so the
+             # CLI starts fast and qiskit-ibm-runtime is only imported when actually used
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["D", "ANN", "PLR", "S101", "T20"]
+"src/kagome_vqe/cli.py" = ["T20"]  # the CLI is the one place that talks to stdout
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.lint.isort]
+known-first-party = ["kagome_vqe"]
+
+[tool.ruff.format]
+docstring-code-format = true
+
+# --------------------------------------------------------------------------------------------
+# Mypy: strict on our own code; the Qiskit stack ships few type hints.
+# --------------------------------------------------------------------------------------------
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_unreachable = true
+# Qiskit is untyped, so anything flowing out of it is Any; warning on every such return would
+# just produce noise. Everything else in strict mode stays on.
+warn_return_any = false
+pretty = true
+files = ["src", "tests"]
+plugins = ["pydantic.mypy"]
+
+[[tool.mypy.overrides]]
+module = [
+  "qiskit.*",
+  "qiskit_aer.*",
+  "qiskit_ibm_runtime.*",
+  "rustworkx.*",
+  "scipy.*",
+  "matplotlib.*",
+]
+ignore_missing_imports = true
+follow_untyped_imports = false  # mypy 2.3 crashes inside qiskit.primitives when it follows them
+
+[[tool.mypy.overrides]]
+module = ["tests.*"]
+disallow_untyped_defs = false
+disallow_incomplete_defs = false
+
+# --------------------------------------------------------------------------------------------
+# Pytest
+# --------------------------------------------------------------------------------------------
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra -m 'not slow and not ibm' --strict-markers"
+markers = [
+  "slow: full optimisation runs (tens of seconds); run with -m slow",
+  "fake: uses a noisy fake backend (Aer + noise model); a few seconds",
+  "ibm: touches IBM Quantum; skipped unless KAGOME_RUN_IBM=1",
+]
+filterwarnings = [
+  "error::DeprecationWarning:kagome_vqe.*",
+  # qiskit-ibm-runtime 0.50 deprecates EstimatorV2 in favour of executor_estimator.Estimator.
+  # We support both behind BackendConfig.estimator_impl; silence the notice until we drop it.
+  "ignore:.*EstimatorV2.*:DeprecationWarning",
+]
+
+[tool.coverage.run]
+source = ["kagome_vqe"]
+branch = true
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true

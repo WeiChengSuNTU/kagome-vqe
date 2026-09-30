@@ -1,0 +1,25 @@
+# RVB + SPSA on a noisy simulation of ibmq_guadalupe (the 2022 challenge device).
+# `aer_noisy` imports the fake backend's calibration data into Aer; `initial_layout` is the
+# 12-qubit heavy-hex loop so the ring gates need no routing SWAPs.
+name = "fake_guadalupe_rvb_spsa"
+seed = 42
+
+[lattice]
+site_order = "hamiltonian_cycle"
+
+[ansatz]
+type = "rvb"
+reps = 1
+
+[optimizer]
+type = "spsa"
+maxiter = 100
+lr = 0.01
+perturbation = 0.01
+
+[backend]
+kind = "aer_noisy"
+name = "FakeGuadalupeV2"
+shots = 4096
+optimization_level = 3
+initial_layout = [1, 2, 3, 5, 8, 11, 14, 13, 12, 10, 7, 4]

@@ -1,0 +1,43 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below and cite the paper it reproduces."
+title: "kagome-vqe: variational quantum eigensolver for the kagome Heisenberg antiferromagnet"
+type: software
+version: 0.1.0
+date-released: "2026-09-30"
+license: Apache-2.0
+repository-code: "https://github.com/victorwk93812/VQE-Kagome"
+authors:
+  - name: "VQE-Kagome contributors"
+keywords:
+  - qiskit
+  - vqe
+  - kagome
+  - heisenberg
+  - quantum-computing
+references:
+  - type: conference-paper
+    title: "Comparative Analysis of Variational Ansatzes in the Kagome Heisenberg Antiferromagnet"
+    authors:
+      - family-names: Shaffar
+        given-names: Abdurrahman Wachid
+        affiliation: "Kyung Hee University"
+      - family-names: Hakim
+        given-names: Amirul Adlil
+        affiliation: "Kyung Hee University"
+      - family-names: Jung
+        given-names: Haejoon
+        affiliation: "Kyung Hee University"
+      - family-names: Shin
+        given-names: Hyundong
+        affiliation: "Kyung Hee University"
+    conference:
+      name: "2023 KICS Fall Conference (한국통신학회 추계종합학술발표회)"
+    year: 2023
+    start: 106
+    end: 107
+  - type: software
+    title: "IBM Quantum Awards: Open Science Prize 2022"
+    authors:
+      - name: "Qiskit Community"
+    year: 2022
+    repository-code: "https://github.com/qiskit-community/open-science-prize-2022"
