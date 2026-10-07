@@ -177,10 +177,12 @@ see through shot noise. Those are exactly the knobs `BackendConfig` exposes.
 * **Larger / periodic kagome.** `Lattice` is a plain edge list; a `kagome_lattice(rows, cols,
   periodic=True)` constructor plus a Hamiltonian-cycle (or matching-based) `site_order` is the
   natural next step. Exact diagonalisation stays feasible to roughly 20 sites.
-* **Parameter-shift gradients** are not directly applicable: in HVA one parameter is shared by
-  18 gates whose generators (`XX`, `YY`, `ZZ` on different bonds) do not all commute, and the
-  eSWAP generator has more than two distinct eigenvalues. ADAM therefore uses finite
-  differences (`fd_eps`), which must be raised to ~0.1 under shot noise; SPSA is the better
-  choice on hardware.
+* **Parameter-shift gradients** apply gate by gate. Each eSWAP is `exp(-i phi/2 SWAP)` and
+  `SWAP/2` has eigenvalues `+-1/2`, so the two-term rule gives RVB's exact gradient from 24
+  energies. In HVA each parameter is shared by 18 rotations: the rule applies per occurrence
+  and the occurrences are summed (72 energies), because the summed generator has many
+  eigenvalues. Only the legacy eSWAP, with its controlled rotation, needs a longer rule. The
+  package currently implements finite differences only (`fd_eps`, raised to ~0.1 under shot
+  noise); see `docs/roadmap.md` for the cost and noise comparison.
 * **Error mitigation studies.** `resilience_level`, `shots` and `initial_layout` are per-run
   config; a benchmark config with several `[[combos]]` can sweep them.

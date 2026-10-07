@@ -120,6 +120,13 @@ Without error mitigation the noisy energies sit far above -18: the transpiled ci
 66 (HVA) to 93 (RVB) CX gates on Guadalupe-era error rates. That gap, not the noiseless
 convergence, is the real benchmark for ansatz depth and mitigation settings.
 
+## Roadmap
+
+Noisy runs currently plateau near -14 because of circuit noise, not optimiser failure, and
+the noisy simulator has known defects. [`docs/roadmap.md`](docs/roadmap.md) records the
+diagnosis, the improvement directions (parameter-shift gradients, depth compression, error
+mitigation, subspace methods such as QSE and Krylov diagonalisation) and the milestone plan.
+
 ## Physics notes
 
 * The open 12-site kagome star has an **exact dimer-product ground state**: six singlets on

@@ -6,6 +6,23 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- `docs/roadmap.md`: diagnosis of the noisy-energy floor, improvement directions
+  (parameter-shift gradients, depth compression, error mitigation, subspace methods) and the
+  milestone plan M0 to M5 with benchmark checks.
+- README noisy FakeGuadalupeV2 benchmark table.
+
+### Fixed
+
+- `docs/physics.md` wrongly stated that parameter-shift gradients do not apply to these
+  ansatzes; they apply gate by gate.
+
+### Known issues
+
+- `aer_ideal` and `aer_noisy` ignore `shots` and readout error, and reuse fixed seeds per
+  batch row, which biases finite-difference gradients. Scheduled as roadmap milestone M0.
+
 ## [0.1.0] - 2026-09-30
 
 Initial release: a from-scratch Qiskit 2.x reimplementation of the IBM Open Science Prize
