@@ -11,33 +11,38 @@ results directories, and move findings into `docs/physics.md` once they are sett
 
 ### 1.1 Measured baseline
 
-| setting | best energy | relative error | source |
+Updated after M0. Energies are the final parameters re-measured once.
+
+| setting | final energy | relative error | source |
 |---|---|---|---|
 | exact statevector, HVA + ADAM | -18.0000 | 0.000 % | `configs/benchmark.toml` |
-| exact statevector, RVB + SPSA | -17.8386 | 0.897 % | `configs/benchmark.toml` |
-| noisy FakeGuadalupeV2, all four combos | -14.01 to -14.10 | 21.7 to 22.2 % | `configs/benchmark_fake_guadalupe.toml` |
+| exact statevector, RVB + SPSA | -17.8369 | 0.906 % | `configs/benchmark.toml` |
+| noisy FakeGuadalupeV2, all four combos | -12.67 to -12.87 | 28.5 to 29.6 % | `configs/benchmark_fake_guadalupe.toml` |
 
-Full tables are in the README.
+Full tables are in the README. Before M0 the noisy figure was -14.0 to -14.1; that simulation
+never sampled measurements, so it omitted readout error.
 
 ### 1.2 Diagnosis: the noisy runs converged to a biased floor
 
 The optimiser is not the bottleneck. Evaluating the circuits at the *exact* ground-state
-parameters on the same noise model gives the same plateau:
+parameters on the same noise model gives the same plateau. Sampled with 16384 shots, after M0:
 
-| ansatz | CX gates | noise-free | full noise | readout error only | gate + T1/T2 only |
+| ansatz | CX gates | noise-free | readout error only | gate + T1/T2 only | full noise |
 |---|---|---|---|---|---|
-| HVA | 66 | -18.000 | -13.973 | -18.000 | -13.973 |
-| RVB | 66 | -18.000 | -13.900 | -18.000 | -13.900 |
+| HVA | 66 | -18.000 | -16.43 | -14.01 | -12.78 |
+| RVB | 66 | -18.000 | -16.43 | -13.94 | -12.70 |
 
 Noise turns the prepared state into a mixture. Under a depolarising model,
 `E_measured ~= (1 - p) * E_ideal`, because every Pauli term averages to zero on the maximally
-mixed state. A reading of -14 corresponds to roughly 78 % of the state surviving 66 CX gates.
+mixed state. The factors multiply: readout keeps 91 % of the energy, gate and decoherence
+errors keep 78 %, and `18 * 0.913 * 0.778 = 12.79` matches the full-noise value. That
+near-multiplicative structure is what makes rescaling-type mitigation (section 2.3) promising.
 More iterations cannot remove this: it is a bias, not a convergence failure. The variational
 principle also holds for mixed states, so a noisy reading below -18 signals an artefact.
 
-### 1.3 Known defects in the noisy simulation
+### 1.3 Known defects in the noisy simulation (fixed in M0)
 
-These were found during the diagnosis and must be fixed before any benchmark below is trusted.
+These were found during the diagnosis. All three are fixed by milestone M0; see section 3.
 
 1. **Shots and readout error are ignored by the `aer_ideal` and `aer_noisy` kinds.**
    `qiskit_aer.primitives.EstimatorV2` computes expectation values with
@@ -266,7 +271,30 @@ These matter only once the bias is reduced, but they are cheap.
 Each milestone has a benchmark check that must pass before the next builds on it. Hardware
 checkpoints are marked; the rest runs on simulators.
 
-### M0. Honest noisy simulation
+### M0. Honest noisy simulation (done except H0)
+
+**Status, October 2026.** Code in commit `0433fd7`; results in
+`results/statevector_m0-summary` and `results/fake_guadalupe_m0-summary`.
+
+| check | result |
+|---|---|
+| standard error falls as 1/√shots | real spread over 40 repeats: 0.144 at 1024 shots, 0.060 at 4096; unit-tested |
+| identical rows differ between calls | yes, while the same run seed reproduces the sequence; unit-tested |
+| readout error alone moves the energy | -18.00 to -16.43 at the exact parameters; unit-tested |
+| RVB + ADAM no longer climbs | final -12.72, at the floor; previously drifted to -10.8 |
+| new noisy baseline in the README | done |
+| H0 hardware run | not run: needs IBM credentials in `.env` and device time |
+
+Two findings to carry forward:
+
+- The standard error reported by the sampling primitive is the bound
+  `sum_i |c_i| sigma_i / sqrt(shots)`, about ten times the real spread for this Hamiltonian.
+  Use repeated measurements, not the reported `std`, when comparing methods in M1 and M2.
+- Noisy density-matrix simulation costs about 2.5 s per energy whatever the shot count, so
+  simulator benchmarks can use large shot budgets for free. Shots are not free on hardware.
+
+Original plan:
+
 
 - **Deliverables:**
   - Switch `aer_ideal` and `aer_noisy` to a sampling estimator, for example `qiskit.primitives.BackendEstimatorV2` over `AerSimulator`.

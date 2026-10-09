@@ -57,12 +57,21 @@ uv run kagome-vqe backends --ibm                    # plus your IBM Quantum devi
 | kind | what it is | use it for |
 |---|---|---|
 | `statevector` | exact expectation values of the logical circuit, no shots | reference numbers, fast iteration, tests |
-| `aer_ideal` | Aer shot-based simulation without noise | checking shot-noise sensitivity of an optimiser |
-| `aer_noisy` | Aer with the noise model and coupling map of the fake backend `name` | the "FakeXXX simulator" benchmark; fast enough for full runs |
+| `aer_ideal` | Aer simulation that samples measurement shots, without noise | checking shot-noise sensitivity of an optimiser |
+| `aer_noisy` | as `aer_ideal`, plus the gate, decoherence and readout noise of the fake backend `name` | the "FakeXXX simulator" benchmark; fast enough for full runs |
 | `fake` | the fake backend `name` driven through qiskit-ibm-runtime's local testing mode | rehearsing a hardware run with the exact code path (sessions, options) |
 | `ibm` | a real IBM Quantum device `name` via the cloud | production runs |
 
 `aer_noisy`, `fake` and `ibm` require `backend.name` (e.g. `FakeGuadalupeV2`, `ibm_torino`).
+Every kind except `statevector` requires `backend.shots`.
+
+All shot-based kinds measure the circuit in the Hamiltonian's three measurement bases and
+average sampled outcomes, as hardware does, so shot noise and readout error are real. Each
+call uses a fresh simulator seed drawn from the run seed, so runs are reproducible while
+successive evaluations are independent. After optimisation, the final parameters are
+re-measured once with `backend.final_shots`; that re-measured energy is the reported result.
+The standard error reported with each energy is the primitive's conservative bound, roughly
+ten times the real spread for this Hamiltonian.
 
 Whatever the backend, the ansatz is transpiled with `generate_preset_pass_manager` and the
 Hamiltonian is moved onto the chosen physical qubits with `observable.apply_layout`, so the
@@ -75,7 +84,7 @@ Each run writes `results/<UTC timestamp>-<name>/`:
 | file | contents |
 |---|---|
 | `config.toml` | the resolved `RunConfig`; replay with `kagome-vqe run results/<dir>/config.toml` |
-| `result.json` | final/best energy, exact energy, relative errors, parameters, ISA stats, timings |
+| `result.json` | re-measured final energy and its relative error, exact energy, total shots, parameters, ISA stats, timings |
 | `trace.csv` | one row per energy evaluation: `eval_idx, iteration, energy, std, shots, wall_time_s, job_id` |
 | `params.npy` | parameters of every evaluation, shape `(nfev, n)` (when `record_params = true`) |
 | `environment.json` | package versions, Python, platform, git commit and dirty flag |
@@ -86,44 +95,58 @@ Each run writes `results/<UTC timestamp>-<name>/`:
 
 ## Benchmark
 
+Every number below is the optimiser's final parameters re-measured once, not the lowest value
+seen during optimisation, which is biased low under shot noise.
+
 ### Exact statevector
 
 Seed 42, the paper's hyperparameters (`maxiter = 100`, `lr = 0.01`, `perturbation = 0.01`),
 initial point `x0 = pi/4 * rand`. Produced by `kagome-vqe benchmark`.
 
-| run | ansatz | optimizer | final E | best E | exact E | rel. err (best) | evaluations | time (s) |
-|---|---|---|---|---|---|---|---|---|
-| rvb_spsa | rvb | spsa | -17.8369 | -17.8386 | -18.0000 | 0.897 % | 201 | 5.0 |
-| rvb_adam | rvb | adam | -17.9980 | -17.9980 | -18.0000 | 0.011 % | 1301 | 24.7 |
-| hva_spsa | hva | spsa | -18.0000 | -18.0000 | -18.0000 | 0.000 % | 201 | 6.4 |
-| hva_adam | hva | adam | -18.0000 | -18.0000 | -18.0000 | 0.000 % | 301 | 9.0 |
+| run | final E (re-measured) | exact E | rel. err | 2q gates | evaluations | total shots | time (s) |
+|---|---|---|---|---|---|---|---|
+| rvb_spsa | -17.8369 | -18.0000 | 0.906 % | 78 | 201 | 0 | 1.7 |
+| rvb_adam | -17.9980 | -18.0000 | 0.011 % | 78 | 1301 | 0 | 11.2 |
+| hva_spsa | -18.0000 | -18.0000 | 0.000 % | 78 | 201 | 0 | 2.2 |
+| hva_adam | -18.0000 | -18.0000 | 0.000 % | 78 | 301 | 0 | 3.3 |
 
 Evaluation counts follow the optimisers' cost model: ADAM with forward differences spends
 `n + 1` evaluations per iteration (13 for RVB, 3 for HVA) plus one final evaluation; SPSA
-spends 2 per iteration plus one final evaluation.
+spends 2 per iteration plus one final evaluation. The two-qubit gate count is for the logical
+circuit; nothing is transpiled for hardware here.
 
 ### Noisy FakeGuadalupeV2
 
-The table below is produced by `configs/benchmark_fake_guadalupe.toml` (`aer_noisy` on
-`FakeGuadalupeV2`, heavy-hex loop layout).
+Produced by `kagome-vqe benchmark configs/benchmark_fake_guadalupe.toml`: `aer_noisy` on
+`FakeGuadalupeV2`, heavy-hex loop layout, seed 42, 4096 shots per measurement basis, final
+re-measurement with 16384 shots, `x0 = 0.3 * rand`. SPSA runs 50 iterations
+(`lr = 0.05`, `perturbation = 0.1`); ADAM runs 30 (`lr = 0.05`, `fd_eps = 0.1`).
 
-Seed 42, 1024 shots, heavy-hex loop layout, `x0 = 0.3 * rand`; SPSA 50 iterations (`lr = 0.05`, `perturbation = 0.1`), ADAM 30 iterations (`lr = 0.05`, `fd_eps = 0.1`).
+| run | final E (re-measured) | exact E | rel. err | 2q gates | evaluations | total shots | time (s) |
+|---|---|---|---|---|---|---|---|
+| rvb_spsa | -12.7168 | -18.0000 | 29.351 % | 66 | 101 | 1,290,240 | 266.9 |
+| rvb_adam | -12.7188 | -18.0000 | 29.340 % | 66 | 391 | 4,853,760 | 1040.3 |
+| hva_spsa | -12.8689 | -18.0000 | 28.506 % | 66 | 101 | 1,290,240 | 273.2 |
+| hva_adam | -12.6729 | -18.0000 | 29.595 % | 66 | 91 | 1,167,360 | 244.2 |
 
-| run | ansatz | optimizer | final E | best E | exact E | rel. err (best) | evaluations | time (s) |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| rvb_spsa | rvb | spsa | -13.8629 | -14.0130 | -18.0000 | 22.150 % | 101 | 265.4 |
-| rvb_adam | rvb | adam | -10.7637 | -14.0785 | -18.0000 | 21.786 % | 391 | 978.3 |
-| hva_spsa | hva | spsa | -13.9971 | -13.9971 | -18.0000 | 22.238 % | 101 | 262.9 |
-| hva_adam | hva | adam | -13.9981 | -14.0973 | -18.0000 | 21.682 % | 91 | 229.1 |
+All four combinations end at the noise floor. Measured directly at the exact ground-state
+parameters, with 16384 shots:
 
-Without error mitigation the noisy energies sit far above -18: the transpiled circuits carry
-66 (HVA) to 93 (RVB) CX gates on Guadalupe-era error rates. That gap, not the noiseless
-convergence, is the real benchmark for ansatz depth and mitigation settings.
+| ansatz | CX gates | readout error only | gate + T1/T2 error only | full noise |
+|---|---|---|---|---|
+| HVA | 66 | -16.43 | -14.01 | -12.78 |
+| RVB | 66 | -16.43 | -13.94 | -12.70 |
+
+The two error sources combine multiplicatively: readout keeps 91 % of the ideal energy, gate
+errors keep 78 %, and their product predicts the full-noise value. No optimiser setting can
+get below this floor; closing the gap is the job of error mitigation and shallower circuits,
+as planned in the roadmap. Results before October 2026 used an Aer estimator that never
+sampled measurements; they omitted readout error and reported a floor near -14.
 
 ## Roadmap
 
-Noisy runs currently plateau near -14 because of circuit noise, not optimiser failure, and
-the noisy simulator has known defects. [`docs/roadmap.md`](docs/roadmap.md) records the
+Noisy runs plateau near -12.7 because of circuit and readout noise, not optimiser failure.
+Milestone M0, an honest noisy simulator, is done. [`docs/roadmap.md`](docs/roadmap.md) records the
 diagnosis, the improvement directions (parameter-shift gradients, depth compression, error
 mitigation, subspace methods such as QSE and Krylov diagonalisation) and the milestone plan.
 

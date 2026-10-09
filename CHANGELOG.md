@@ -17,11 +17,21 @@ All notable changes to this project are documented here. The format follows
 
 - `docs/physics.md` wrongly stated that parameter-shift gradients do not apply to these
   ansatzes; they apply gate by gate.
+- Roadmap M0: `aer_ideal` and `aer_noisy` ignored `shots` and readout error because Aer's
+  estimator never sampled measurements, and fixed per-row seeds gave finite differences a
+  constant fake slope. Both kinds now sample measurements through `BackendEstimatorV2`, and
+  every estimator draws a fresh seed per call from the run seed.
+- Shot counts were converted to primitive precision with an off-by-one rounding error.
 
-### Known issues
+### Changed
 
-- `aer_ideal` and `aer_noisy` ignore `shots` and readout error, and reuse fixed seeds per
-  batch row, which biases finite-difference gradients. Scheduled as roadmap milestone M0.
+- `run_vqe` re-measures the final parameters once with the new `backend.final_shots`
+  (default 16384). `result.json`, benchmark tables and the CLI report that energy and the
+  total shot count; the trace minimum is kept only for reference, since it is biased low.
+- `backend.shots` is now required for every kind except `statevector`.
+- New `backend.aer_method`; the default picks statevector sampling without noise and density
+  matrices for noisy circuits up to 12 active qubits.
+- `configs/benchmark_fake_guadalupe.toml` uses 4096 shots and a 16384-shot re-measurement.
 
 ## [0.1.0] - 2026-09-30
 
