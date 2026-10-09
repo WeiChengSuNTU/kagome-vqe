@@ -83,12 +83,68 @@ def test_statevector_estimator_batches(hamiltonian) -> None:
             est.evaluate(np.zeros((1, 1, 2)))
 
 
-def test_aer_ideal_is_shot_noisy_but_close(hamiltonian) -> None:
+def _spread(problem, shots: int, rows: int = 40) -> tuple[float, float, np.ndarray]:
+    """Mean and empirical spread of the energy over ``rows`` identical parameter rows."""
+    x = np.full((rows, 2), 0.3)
+    with AerEnergy(problem, shots=shots, seed=3) as est:
+        batch = est.evaluate(x)
+    return float(batch.energies.mean()), float(batch.energies.std(ddof=1)), batch.stds
+
+
+def test_aer_samples_real_shot_noise(hamiltonian) -> None:
+    """Regression: Aer's own estimator ignored shots; energies must now be sampled."""
     problem = compile_for_backend(HVAnsatz().build(), hamiltonian, None)
-    with AerEnergy(problem, shots=2000, seed=1) as est:
-        batch = est.evaluate(np.zeros((1, 2)))
-    assert batch.shots == 2000
-    assert batch.energies[0] == pytest.approx(-18.0, abs=0.5)
+    with StatevectorEnergy(problem) as exact_est:
+        exact = float(exact_est.evaluate(np.full((1, 2), 0.3)).energies[0])
+    mean_lo, spread_lo, stds_lo = _spread(problem, shots=256)
+    mean_hi, spread_hi, _ = _spread(problem, shots=4096)
+    assert spread_lo > 0
+    assert spread_lo / spread_hi > 2.5  # sqrt(4096 / 256) = 4 in expectation
+    assert np.all(stds_lo >= spread_lo)  # the primitive's std is a conservative bound
+    assert mean_hi == pytest.approx(exact, abs=5 * spread_hi / np.sqrt(40) + 1e-9)
+    assert mean_lo == pytest.approx(exact, abs=5 * spread_lo / np.sqrt(40) + 1e-9)
+
+
+def test_fresh_seed_per_call_but_reproducible(hamiltonian) -> None:
+    """Regression: a fixed seed gave each batch row the same noise on every call."""
+    problem = compile_for_backend(HVAnsatz().build(), hamiltonian, None)
+    x = np.full((3, 2), 0.3)
+    with AerEnergy(problem, shots=512, seed=9) as a, AerEnergy(problem, shots=512, seed=9) as b:
+        a1, a2 = a.evaluate(x).energies, a.evaluate(x).energies
+        b1, b2 = b.evaluate(x).energies, b.evaluate(x).energies
+    assert not np.allclose(a1, a2)  # successive calls are independent
+    assert np.allclose(a1, b1)  # but the same run seed reproduces the sequence
+    assert np.allclose(a2, b2)
+
+
+def test_shot_override_and_method_choice(hamiltonian, guadalupe) -> None:
+    problem = compile_for_backend(HVAnsatz().build(), hamiltonian, None)
+    with AerEnergy(problem, shots=128, seed=1) as est:
+        assert est.description["method"] == "statevector"
+        assert est.evaluate(np.zeros((1, 2))).shots == 128
+        assert est.evaluate(np.zeros((1, 2)), shots=1024).shots == 1024
+    isa = compile_for_backend(
+        HVAnsatz().build(), hamiltonian, guadalupe, initial_layout=GUADALUPE_HEAVY_HEX_LOOP
+    )
+    noisy = AerEnergy(isa, shots=128, noise_backend=guadalupe)
+    assert noisy.description["method"] == "density_matrix"
+    assert isa.measurement_groups == 3
+    with pytest.raises(ValueError, match="shots"):
+        AerEnergy(problem, shots=0)
+
+
+@pytest.mark.fake
+def test_readout_error_now_affects_energy(hamiltonian, guadalupe) -> None:
+    """Regression: readout error was never applied because nothing was measured."""
+    from qiskit_aer.noise import NoiseModel
+
+    isa = compile_for_backend(
+        HVAnsatz().build(), hamiltonian, guadalupe, initial_layout=GUADALUPE_HEAVY_HEX_LOOP
+    )
+    readout_only = NoiseModel.from_backend(guadalupe, gate_error=False, thermal_relaxation=False)
+    with AerEnergy(isa, shots=4096, noise_model=readout_only, seed=2, method="statevector") as est:
+        energy = float(est.evaluate(np.zeros((1, 2))).energies[0])
+    assert energy > -17.5  # exact is -18; readout error alone costs most of an energy unit
 
 
 def test_make_estimator_dispatch(hamiltonian, guadalupe) -> None:

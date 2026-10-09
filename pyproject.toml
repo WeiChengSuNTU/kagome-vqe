@@ -164,6 +164,8 @@ filterwarnings = [
   # qiskit-ibm-runtime 0.50 deprecates EstimatorV2 in favour of executor_estimator.Estimator.
   # We support both behind BackendConfig.estimator_impl; silence the notice until we drop it.
   "ignore:.*EstimatorV2.*:DeprecationWarning",
+  # Aer and runtime local mode fork worker processes from a threaded interpreter (third party).
+  "ignore:This process .* is multi-threaded, use of fork:DeprecationWarning",
 ]
 
 [tool.coverage.run]

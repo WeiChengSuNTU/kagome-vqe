@@ -57,11 +57,44 @@ def test_run_vqe_trace_accounting(small_cfg: RunConfig) -> None:
     assert len(result.params_history) == 7
 
 
+def test_final_remeasurement_exact(small_cfg: RunConfig) -> None:
+    result = run_vqe(small_cfg)
+    assert result.final_shots is None
+    assert result.total_shots == 0
+    assert result.final_std == 0.0
+    assert result.final_energy == pytest.approx(result.energy)  # exact: same point, same value
+    assert result.final_relative_error == pytest.approx(result.relative_error)
+
+
+def test_final_remeasurement_and_shot_accounting(tmp_path: Path) -> None:
+    cfg = RunConfig(
+        name="shots",
+        seed=2,
+        x0_scale=0.2,
+        optimizer=OptimizerConfig(type="spsa", maxiter=2),
+        backend=BackendConfig(kind="aer_ideal", shots=200, final_shots=5000),
+        output_dir=tmp_path,
+    )
+    result = run_vqe(cfg)
+    assert result.final_shots == 5000
+    assert all(row.shots == 200 for row in result.trace)
+    assert result.nfev == 5  # the re-measurement is not part of the optimiser's trace
+    assert result.total_shots == 3 * (5 * 200 + 5000)  # 3 measurement bases
+    assert result.final_std > 0
+    assert abs(result.final_energy - result.exact_energy) < 3.0
+    run_dir = save_run(result, new_run_dir(cfg))
+    loaded = load_run(run_dir)
+    assert loaded.result["final_shots"] == 5000
+    assert loaded.result["total_shots"] == result.total_shots
+    assert loaded.result["within_1_percent"] == (result.final_relative_error < 0.01)
+
+
 def test_energy_objective_records_batches() -> None:
     class Fake:
         description: ClassVar[dict[str, Any]] = {}
 
-        def evaluate(self, params):
+        def evaluate(self, params: np.ndarray, *, shots: int | None = None) -> EnergyBatch:
+            del shots
             return EnergyBatch(energies=params.sum(axis=1), stds=np.zeros(len(params)), shots=5)
 
         def __enter__(self):
@@ -100,7 +133,10 @@ def test_save_and_load_round_trip(small_cfg: RunConfig) -> None:
 
     json_path, md_path = write_benchmark_summary([loaded], run_dir.parent / "summary")
     assert json_path.exists()
-    assert "rel. err" in md_path.read_text()
+    table = md_path.read_text()
+    assert "rel. err" in table
+    assert "total shots" in table
+    assert "final E (re-measured)" in table
     fig = plot_runs([loaded], axis="evaluation")
     assert fig.axes[0].lines
 

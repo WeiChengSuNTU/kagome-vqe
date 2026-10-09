@@ -2,10 +2,13 @@
 # calibration data). Hyperparameters differ from benchmark.toml on purpose:
 #   * ADAM's finite-difference step must be large compared with shot noise (fd_eps = 0.1);
 #   * SPSA's perturbation likewise (0.1), with a larger step so 50 iterations get somewhere;
-#   * budgets are reduced because a noisy 16-qubit evaluation costs ~3 s at 1024 shots and
-#     scales with shots: SPSA 50 iterations (101 evaluations), ADAM 30 (391 for RVB, 91 for HVA).
-# Expect energies well above -18: with ~66-93 CX gates on Guadalupe-era error rates the noisy
-# floor is around -13 to -14 without error mitigation. That gap is the point of this benchmark.
+#   * budgets are reduced because a noisy evaluation costs ~2.5 s (density-matrix simulation,
+#     independent of the shot count): SPSA 50 iterations (101 evaluations), ADAM 30 (391 for
+#     RVB, 91 for HVA). Shots are therefore generous, and the final energy is re-measured once
+#     with final_shots.
+# Energies are sampled, so shot noise and readout error are real. At the exact ground-state
+# parameters the noisy energy is about -12.7 (readout error alone: -16.4; gate and T1/T2 error
+# alone: -14.0). No optimiser can beat that floor; it is the target for error mitigation.
 name = "fake_guadalupe"
 seed = 42
 x0_scale = 0.3
@@ -17,7 +20,8 @@ site_order = "hamiltonian_cycle"
 [backend]
 kind = "aer_noisy"
 name = "FakeGuadalupeV2"
-shots = 1024
+shots = 4096
+final_shots = 16384
 optimization_level = 3
 initial_layout = [1, 2, 3, 5, 8, 11, 14, 13, 12, 10, 7, 4]
 

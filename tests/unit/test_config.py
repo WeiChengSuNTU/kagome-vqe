@@ -75,6 +75,14 @@ def test_backend_requires_name_for_devices() -> None:
     assert BackendConfig(kind="fake", name="FakeGuadalupeV2").label() == "fake:FakeGuadalupeV2"
 
 
+def test_sampling_backends_require_shots() -> None:
+    with pytest.raises(ValidationError, match=r"requires backend\.shots"):
+        BackendConfig(kind="aer_ideal", shots=None)
+    assert BackendConfig(kind="statevector", shots=None).remeasure_shots is None
+    assert BackendConfig(kind="aer_ideal").remeasure_shots == 16384
+    assert BackendConfig(kind="aer_ideal", shots=100, final_shots=None).remeasure_shots == 100
+
+
 def test_validation_ranges() -> None:
     with pytest.raises(ValidationError):
         BackendConfig(resilience_level=3)

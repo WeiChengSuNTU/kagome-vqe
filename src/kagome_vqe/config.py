@@ -183,8 +183,14 @@ class BackendConfig(_Frozen):
         kind: Evaluation backend family.
         name: Fake backend class (``"FakeGuadalupeV2"``) or IBM device (``"ibm_torino"``).
             Required for ``aer_noisy``, ``fake`` and ``ibm``.
-        shots: Shots per expectation value; ``None`` means exact (statevector) or the
-            primitive's default precision.
+        shots: Shots per measurement basis for every energy the optimiser requests. Required
+            for every kind except ``statevector``, where it is ignored.
+        final_shots: Shots for the single re-measurement of the optimiser's final parameters.
+            This, not the minimum over the trace, is the reported energy: the minimum of noisy
+            samples is biased low. ``None`` reuses ``shots``.
+        aer_method: Aer simulation method for ``aer_ideal``/``aer_noisy``. ``"auto"`` uses
+            density matrices up to 12 active qubits (cost independent of shots) and statevector
+            trajectories beyond.
         resilience_level: Runtime error-mitigation level (0-2); ``fake``/``ibm`` only.
         optimization_level: Transpiler preset level.
         initial_layout: Physical qubits for the ansatz qubits; ``None`` lets the transpiler
@@ -201,6 +207,7 @@ class BackendConfig(_Frozen):
     kind: BackendKind = "statevector"
     name: str | None = None
     shots: Annotated[int, Field(ge=1)] | None = 4096
+    final_shots: Annotated[int, Field(ge=1)] | None = 16384
     resilience_level: Annotated[int, Field(ge=0, le=2)] = 0
     optimization_level: Annotated[int, Field(ge=0, le=3)] = 3
     initial_layout: list[int] | None = None
@@ -209,13 +216,24 @@ class BackendConfig(_Frozen):
     estimator_impl: Literal["legacy_v2", "executor"] = "legacy_v2"
     retries: Annotated[int, Field(ge=0)] = 5
     job_timeout_s: Annotated[int, Field(ge=1)] = 3600
+    aer_method: Literal["auto", "density_matrix", "statevector", "matrix_product_state"] = "auto"
 
     @model_validator(mode="after")
-    def _needs_name(self) -> Self:
+    def _needs_name_and_shots(self) -> Self:
         if self.kind in ("aer_noisy", "fake", "ibm") and not self.name:
             msg = f"backend.kind={self.kind!r} requires backend.name"
             raise ValueError(msg)
+        if self.kind != "statevector" and self.shots is None:
+            msg = f"backend.kind={self.kind!r} samples measurements and requires backend.shots"
+            raise ValueError(msg)
         return self
+
+    @property
+    def remeasure_shots(self) -> int | None:
+        """Shots for the final re-measurement (``None`` for exact evaluation)."""
+        if self.is_exact:
+            return None
+        return self.final_shots or self.shots
 
     @property
     def is_exact(self) -> bool:

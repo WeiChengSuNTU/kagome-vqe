@@ -179,14 +179,16 @@ def _run_one(cfg: RunConfig, *, dry_run: bool, progress: bool) -> Path | None:
     table = Table(title=f"{cfg.name} on {cfg.backend.label()}")
     table.add_column("quantity")
     table.add_column("value")
+    shots_note = "exact" if result.final_shots is None else f"{result.final_shots} shots"
     table.add_row("exact E0", f"{result.exact_energy:.6f}")
-    table.add_row("final energy", f"{result.energy:.6f}")
-    table.add_row("best energy", f"{result.best_energy:.6f}")
     table.add_row(
-        "relative error (final / best)",
-        f"{100 * result.relative_error:.4f} % / {100 * result.best_relative_error:.4f} %",
+        f"final energy (re-measured, {shots_note})",
+        f"{result.final_energy:.6f} (std bound {result.final_std:.3f})",
     )
+    table.add_row("relative error", f"{100 * result.final_relative_error:.4f} %")
+    table.add_row("trace minimum (biased low)", f"{result.best_energy:.6f}")
     table.add_row("evaluations / iterations", f"{result.nfev} / {result.nit}")
+    table.add_row("total shots", f"{result.total_shots:,}")
     table.add_row("wall time", f"{result.wall_time_s:.1f} s")
     table.add_row("saved to", str(run_dir))
     console.print(table)

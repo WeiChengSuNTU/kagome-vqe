@@ -25,6 +25,7 @@ perturbation = 0.1       # perturbation must exceed shot noise; 0.01 is far too 
 kind = "ibm"
 name = "ibm_torino"
 shots = 4096
+final_shots = 16384     # one re-measurement of the final parameters (3 bases x 16384 shots)
 resilience_level = 1     # TREX readout mitigation + twirling; 2 adds ZNE (slower)
 optimization_level = 3
 mode = "session"         # keeps the device reserved between iterations

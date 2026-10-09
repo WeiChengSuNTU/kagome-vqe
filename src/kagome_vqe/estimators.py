@@ -7,8 +7,18 @@ whatever the backend.
 
 Estimators are context managers because the runtime ones own a ``Session``/``Batch``::
 
-    with make_estimator(cfg.backend, problem, seed=cfg.seed) as estimator:
+    with make_estimator(cfg.backend, problem, backend, seed=cfg.seed) as estimator:
         energies = estimator.evaluate(params).energies
+
+Two properties matter for honest noisy benchmarks:
+
+* **Shots are real.** Every shot-based estimator samples measurement outcomes, so shot noise
+  and readout error are present exactly as on hardware. (Aer's own ``EstimatorV2`` computes
+  expectation values without sampling; it is deliberately not used.)
+* **Seeds are fresh per call.** A fixed simulator seed makes each row of a batch carry the same
+  noise realisation on every call, which finite-difference optimisers read as a slope. Each
+  estimator owns a seed *stream* derived from the run seed, so runs stay reproducible while
+  successive calls are statistically independent.
 """
 
 from __future__ import annotations
@@ -16,11 +26,12 @@ from __future__ import annotations
 import contextlib
 import inspect
 import logging
+import math
 import time
 from dataclasses import dataclass
 from functools import cache
 from types import TracebackType
-from typing import Any, Protocol, Self, runtime_checkable
+from typing import Any, Literal, Protocol, Self, runtime_checkable
 
 import numpy as np
 from numpy.typing import NDArray
@@ -29,6 +40,7 @@ from kagome_vqe.config import BackendConfig, Settings
 from kagome_vqe.transpile import IsaProblem
 
 __all__ = [
+    "DENSITY_MATRIX_MAX_QUBITS",
     "AerEnergy",
     "EnergyBatch",
     "EnergyEstimator",
@@ -41,6 +53,16 @@ log = logging.getLogger(__name__)
 
 FloatArray = NDArray[np.float64]
 
+AerMethod = Literal["auto", "density_matrix", "statevector", "matrix_product_state"]
+
+DENSITY_MATRIX_MAX_QUBITS = 12
+"""Largest number of *active* qubits for which ``aer_method="auto"`` picks density matrices.
+
+A density matrix on 12 qubits takes 256 MB and its cost does not depend on the shot count,
+which makes large shot budgets free. Beyond that, ``auto`` falls back to statevector
+trajectories, whose cost grows with the number of shots.
+"""
+
 
 @dataclass(frozen=True, slots=True)
 class EnergyBatch:
@@ -48,8 +70,10 @@ class EnergyBatch:
 
     Attributes:
         energies: Shape ``(k,)``.
-        stds: Standard errors, shape ``(k,)``; zeros for exact evaluation.
-        shots: Shots per expectation value as reported by the primitive, if known.
+        stds: Standard errors as reported by the primitive, shape ``(k,)``; zeros for exact
+            evaluation. For the sampling estimators this is the primitive's conservative bound
+            ``sum_i |c_i| sigma_i / sqrt(shots)``, typically several times the real spread.
+        shots: Shots per measurement basis, if known.
         job_id: Runtime job id, if any.
         wall_time_s: Seconds spent in the primitive call (including queueing).
     """
@@ -70,8 +94,12 @@ class EnergyEstimator(Protocol):
         """Backend and options, for the results metadata."""
         ...
 
-    def evaluate(self, params: FloatArray) -> EnergyBatch:
-        """``params`` has shape ``(k, n)``; returns ``k`` energies."""
+    def evaluate(self, params: FloatArray, *, shots: int | None = None) -> EnergyBatch:
+        """``params`` has shape ``(k, n)``; returns ``k`` energies.
+
+        ``shots`` overrides the configured shot count for this call only (used for the final
+        re-measurement); exact estimators ignore it.
+        """
         ...
 
     def __enter__(self) -> Self:
@@ -96,6 +124,16 @@ def _as_2d(params: FloatArray) -> FloatArray:
         msg = f"params must have shape (k, n), got {arr.shape}"
         raise ValueError(msg)
     return arr
+
+
+def _precision(shots: int | None) -> float | None:
+    """Target precision that makes a V2 primitive run exactly ``shots`` shots.
+
+    Primitives compute ``ceil(1 / precision**2)``. With ``precision = 1 / sqrt(shots)`` that
+    can land one shot high through rounding (``1 / (1 / sqrt(128))**2 = 128.00000000000003``),
+    so the precision is nudged up by a relative ``1e-12``.
+    """
+    return None if shots is None else (1.0 + 1e-12) / math.sqrt(shots)
 
 
 def _job_result(job: Any, timeout_s: int) -> Any:
@@ -136,28 +174,41 @@ def _shots_from_metadata(metadata: dict[str, Any]) -> int | None:
     return None
 
 
+def _active_qubits(problem: IsaProblem) -> int:
+    """Qubits touched by at least one instruction (Aer simulates only these)."""
+    circuit = problem.circuit
+    used = {circuit.find_bit(q).index for inst in circuit.data for q in inst.qubits}
+    return len(used)
+
+
 class _PrimitiveEnergy:
-    """Shared logic: run one PUB on a V2 estimator and unpack the result."""
+    """Shared logic: seed stream, one PUB per call, result unpacking."""
 
     def __init__(
-        self, problem: IsaProblem, description: dict[str, Any], *, shots: int | None = None
+        self,
+        problem: IsaProblem,
+        description: dict[str, Any],
+        *,
+        shots: int | None = None,
+        seed: int | None = None,
     ) -> None:
         self._problem = problem
         self._description = description
         self._configured_shots = shots
+        self._seeds = np.random.default_rng(seed)
 
     @property
     def description(self) -> dict[str, Any]:
         """Backend and options."""
         return dict(self._description)
 
-    def _run_pub(self, primitive: Any, params: FloatArray) -> EnergyBatch:
-        params = _as_2d(params)
-        pub = (self._problem.circuit, self._problem.observable, params)
-        start = time.perf_counter()
-        job = primitive.run([pub])
-        result = job.result()
-        elapsed = time.perf_counter() - start
+    def _next_seed(self) -> int:
+        """A fresh simulator seed, drawn from the run's reproducible stream."""
+        return int(self._seeds.integers(0, 2**31 - 1))
+
+    def _unpack(
+        self, job: Any, result: Any, params: FloatArray, elapsed: float, shots: int | None
+    ) -> EnergyBatch:
         data = result[0].data
         energies = np.atleast_1d(np.asarray(data.evs, dtype=float))
         stds = np.atleast_1d(
@@ -172,10 +223,21 @@ class _PrimitiveEnergy:
         return EnergyBatch(
             energies=energies,
             stds=stds,
-            shots=_shots_from_metadata(metadata) or self._configured_shots,
+            shots=_shots_from_metadata(metadata) or shots,
             job_id=None if job_id_str is None else str(job_id_str),
             wall_time_s=elapsed,
         )
+
+    def _run_pub(self, primitive: Any, params: FloatArray, shots: int | None) -> EnergyBatch:
+        params = _as_2d(params)
+        pub = (self._problem.circuit, self._problem.observable, params)
+        precision = _precision(shots)
+        start = time.perf_counter()
+        job = (
+            primitive.run([pub]) if precision is None else primitive.run([pub], precision=precision)
+        )
+        result = job.result()
+        return self._unpack(job, result, params, time.perf_counter() - start, shots)
 
     def __enter__(self) -> Self:
         """No resources to acquire."""
@@ -203,62 +265,88 @@ class StatevectorEnergy(_PrimitiveEnergy):
         """Create the estimator."""
         from qiskit.primitives import StatevectorEstimator
 
-        super().__init__(problem, {"kind": "statevector", "seed": seed})
+        super().__init__(problem, {"kind": "statevector", "seed": seed}, seed=seed)
         self._primitive = StatevectorEstimator(default_precision=0.0, seed=seed)
 
-    def evaluate(self, params: FloatArray) -> EnergyBatch:
-        """Exact energies."""
-        return self._run_pub(self._primitive, params)
+    def evaluate(self, params: FloatArray, *, shots: int | None = None) -> EnergyBatch:
+        """Exact energies; ``shots`` is ignored."""
+        del shots
+        return self._run_pub(self._primitive, params, None)
 
 
 class AerEnergy(_PrimitiveEnergy):
-    """Shot-based Aer simulation, ideal or with a fake backend's noise model.
+    """Shot-sampled Aer simulation, ideal or with a device noise model.
+
+    Energies are estimated exactly as on hardware: the circuit is measured in each qubit-wise
+    commuting basis (three for the Heisenberg model), outcomes are sampled, and Pauli
+    expectation values are averaged. Shot noise and readout error are therefore present.
 
     Args:
-        problem: ISA problem (transpiled for the fake backend when ``noise_backend`` is given).
-        shots: Shots per expectation value; ``None`` uses Aer's default precision.
+        problem: ISA problem (transpiled for ``noise_backend`` when one is given).
+        shots: Shots per measurement basis.
         noise_backend: A fake ``BackendV2`` whose noise model and coupling map to import.
-        seed: Simulator seed.
+        noise_model: An explicit ``qiskit_aer.noise.NoiseModel``; overrides the backend's.
+            Useful for isolating error sources, e.g. readout error only.
+        seed: Seeds the per-call seed stream.
+        method: Aer simulation method. ``"auto"`` picks ``statevector`` without noise (all
+            shots are sampled from one final state), density matrices for noisy circuits up to
+            :data:`DENSITY_MATRIX_MAX_QUBITS` active qubits, and Aer's own choice beyond.
     """
 
     def __init__(
         self,
         problem: IsaProblem,
         *,
-        shots: int | None,
+        shots: int,
         noise_backend: Any | None = None,
+        noise_model: Any | None = None,
         seed: int | None = None,
+        method: AerMethod = "auto",
     ) -> None:
         """Create the estimator."""
-        from qiskit_aer.primitives import EstimatorV2
+        from qiskit.primitives import BackendEstimatorV2
+        from qiskit_aer import AerSimulator
 
-        run_options: dict[str, Any] = {}
-        if shots is not None:
-            run_options["shots"] = shots
-        if seed is not None:
-            run_options["seed_simulator"] = seed
-        if noise_backend is None:
-            kind = "aer_ideal"
-            self._primitive = EstimatorV2(options={"run_options": run_options})
+        if shots < 1:
+            msg = f"shots must be >= 1, got {shots}"
+            raise ValueError(msg)
+        noisy = noise_backend is not None or noise_model is not None
+        resolved: str = method
+        if method == "auto":
+            if not noisy:
+                resolved = "statevector"
+            elif _active_qubits(problem) <= DENSITY_MATRIX_MAX_QUBITS:
+                resolved = "density_matrix"
+            else:
+                resolved = "automatic"
+        sim_options: dict[str, Any] = {"method": resolved}
+        if noise_model is not None:
+            sim_options["noise_model"] = noise_model
+        if noise_backend is not None:
+            simulator = AerSimulator.from_backend(noise_backend, **sim_options)
         else:
-            kind = "aer_noisy"
-            self._primitive = EstimatorV2.from_backend(
-                noise_backend, options={"run_options": run_options}
-            )
+            simulator = AerSimulator(**sim_options)
+        self._primitive = BackendEstimatorV2(backend=simulator)
+        kind = "aer_noisy" if noisy else "aer_ideal"
         super().__init__(
             problem,
             {
                 "kind": kind,
                 "noise_backend": None if noise_backend is None else str(noise_backend.name),
+                "custom_noise_model": noise_model is not None,
+                "method": resolved,
                 "shots": shots,
                 "seed": seed,
+                "std": "primitive upper bound sum|c_i|sigma_i/sqrt(shots)",
             },
             shots=shots,
+            seed=seed,
         )
 
-    def evaluate(self, params: FloatArray) -> EnergyBatch:
-        """Sampled energies."""
-        return self._run_pub(self._primitive, params)
+    def evaluate(self, params: FloatArray, *, shots: int | None = None) -> EnergyBatch:
+        """Sampled energies with a fresh simulator seed."""
+        self._primitive.options.seed_simulator = self._next_seed()
+        return self._run_pub(self._primitive, params, shots or self._configured_shots)
 
 
 class RuntimeEnergy(_PrimitiveEnergy):
@@ -273,7 +361,8 @@ class RuntimeEnergy(_PrimitiveEnergy):
         problem: ISA problem transpiled for ``backend``.
         backend: Real or fake ``BackendV2``.
         cfg: Backend configuration (shots, resilience level, mode, retries, ...).
-        seed: ``simulator.seed_simulator`` for local/fake execution; ignored on hardware.
+        seed: Seeds the per-call simulator seed stream in local (fake) mode; ignored on
+            hardware.
     """
 
     def __init__(
@@ -292,10 +381,10 @@ class RuntimeEnergy(_PrimitiveEnergy):
                 "max_time": cfg.max_time,
             },
             shots=cfg.shots,
+            seed=seed,
         )
         self._backend = backend
         self._cfg = cfg
-        self._seed = seed
         self._mode: Any = None
         self._primitive: Any = None
 
@@ -305,8 +394,8 @@ class RuntimeEnergy(_PrimitiveEnergy):
         options: dict[str, Any] = {"resilience_level": self._cfg.resilience_level}
         if self._cfg.shots is not None:
             options["default_shots"] = self._cfg.shots
-        if self._seed is not None and self._cfg.kind == "fake":
-            options["simulator"] = {"seed_simulator": self._seed}
+        if self._cfg.kind == "fake":
+            options["simulator"] = {"seed_simulator": self._next_seed()}
         return options
 
     def _open_mode(self) -> Any:
@@ -375,14 +464,25 @@ class RuntimeEnergy(_PrimitiveEnergy):
         self._mode = self._open_mode()
         self._primitive = self._make_primitive()
 
+    def _refresh_seed(self) -> None:
+        """Local (fake) mode only: new simulator seed for every job."""
+        if self._cfg.kind != "fake":
+            return
+        simulator = getattr(getattr(self._primitive, "options", None), "simulator", None)
+        if simulator is None:
+            return
+        with contextlib.suppress(AttributeError, TypeError, ValueError):
+            simulator.seed_simulator = self._next_seed()
+
     # -- evaluation ---------------------------------------------------------------------------
 
-    def evaluate(self, params: FloatArray) -> EnergyBatch:
+    def evaluate(self, params: FloatArray, *, shots: int | None = None) -> EnergyBatch:
         """Submit one PUB with retries."""
         if self._primitive is None:
             msg = "RuntimeEnergy must be used as a context manager"
             raise RuntimeError(msg)
         params = _as_2d(params)
+        precision = _precision(shots)
         last_error: BaseException | None = None
         for attempt in range(self._cfg.retries + 1):
             job = None
@@ -390,10 +490,17 @@ class RuntimeEnergy(_PrimitiveEnergy):
             try:
                 if not self._mode_is_open():
                     self._reopen()
+                self._refresh_seed()
                 pub = (self._problem.circuit, self._problem.observable, params)
-                job = self._primitive.run([pub])
+                job = (
+                    self._primitive.run([pub])
+                    if precision is None
+                    else self._primitive.run([pub], precision=precision)
+                )
                 result = _job_result(job, self._cfg.job_timeout_s)
-                return self._unpack(job, result, params, time.perf_counter() - start)
+                return self._unpack(
+                    job, result, params, time.perf_counter() - start, shots or self._cfg.shots
+                )
             except (KeyboardInterrupt, SystemExit):
                 self._cancel(job)
                 raise
@@ -425,26 +532,6 @@ class RuntimeEnergy(_PrimitiveEnergy):
         except Exception:
             log.debug("could not cancel job", exc_info=True)
 
-    def _unpack(self, job: Any, result: Any, params: FloatArray, elapsed: float) -> EnergyBatch:
-        data = result[0].data
-        energies = np.atleast_1d(np.asarray(data.evs, dtype=float))
-        stds = np.atleast_1d(
-            np.asarray(getattr(data, "stds", np.zeros_like(energies)), dtype=float)
-        )
-        if energies.shape != (params.shape[0],):
-            msg = f"expected {params.shape[0]} energies, got shape {energies.shape}"
-            raise RuntimeError(msg)
-        metadata = dict(getattr(result[0], "metadata", {}) or {})
-        job_id = getattr(job, "job_id", None)
-        job_id_str = job_id() if callable(job_id) else job_id
-        return EnergyBatch(
-            energies=energies,
-            stds=stds,
-            shots=_shots_from_metadata(metadata) or self._cfg.shots,
-            job_id=None if job_id_str is None else str(job_id_str),
-            wall_time_s=elapsed,
-        )
-
 
 def make_estimator(
     cfg: BackendConfig,
@@ -461,16 +548,19 @@ def make_estimator(
         problem: ISA problem already compiled for ``backend``.
         backend: The object from :func:`kagome_vqe.backends.resolve_backend` (``None`` for
             statevector).
-        seed: Simulator seed.
+        seed: Seeds the estimator's per-call seed stream.
         settings: IBM credentials (unused here; the backend object already carries them).
     """
     del settings  # reserved for future per-job options
     if cfg.kind == "statevector":
         return StatevectorEnergy(problem, seed=seed)
+    assert cfg.shots is not None  # guaranteed by BackendConfig validation
     if cfg.kind == "aer_ideal":
-        return AerEnergy(problem, shots=cfg.shots, seed=seed)
+        return AerEnergy(problem, shots=cfg.shots, seed=seed, method=cfg.aer_method)
     if cfg.kind == "aer_noisy":
-        return AerEnergy(problem, shots=cfg.shots, noise_backend=backend, seed=seed)
+        return AerEnergy(
+            problem, shots=cfg.shots, noise_backend=backend, seed=seed, method=cfg.aer_method
+        )
     if backend is None:
         msg = f"backend.kind={cfg.kind!r} needs a backend object"
         raise ValueError(msg)

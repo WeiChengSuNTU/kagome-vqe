@@ -9,6 +9,7 @@ compute the exact reference energy) and is what ``kagome-vqe run --dry-run`` rep
 from __future__ import annotations
 
 import logging
+import math
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -176,8 +177,10 @@ class VQERunResult:
 
     Attributes:
         config: The configuration that produced it.
-        energy: Energy at the optimiser's final parameters.
-        best_energy: Lowest energy observed anywhere in the trace (what the challenge scored).
+        energy: The optimiser's own last evaluation at its final parameters (regular shots).
+        best_energy: Lowest energy anywhere in the trace. Biased low under shot noise, because
+            it selects favourable fluctuations; kept for comparison with the 2022 challenge,
+            which scored this number. Report ``final_energy`` instead.
         optimal_params: Final parameters.
         x0: Initial parameters.
         exact_energy: Reference ground-state energy.
@@ -189,6 +192,13 @@ class VQERunResult:
         estimator: Estimator description (backend, options).
         wall_time_s: Total optimisation time.
         optimizer_message: Termination reason.
+        final_energy: The final parameters re-measured once with ``backend.final_shots``. This
+            is the headline result.
+        final_std: Standard error of ``final_energy`` as reported by the primitive (an upper
+            bound for sampling estimators; 0 when exact).
+        final_shots: Shots per measurement basis used for ``final_energy``; ``None`` if exact.
+        total_shots: Circuit executions spent, including the re-measurement:
+            ``sum(shots per evaluation) * measurement_groups``; 0 when exact.
     """
 
     config: RunConfig
@@ -205,6 +215,15 @@ class VQERunResult:
     estimator: dict[str, Any] = field(default_factory=dict)
     wall_time_s: float = 0.0
     optimizer_message: str = ""
+    final_energy: float = math.nan
+    final_std: float = 0.0
+    final_shots: int | None = None
+    total_shots: int = 0
+
+    @property
+    def final_relative_error(self) -> float:
+        """Relative error of the re-measured ``final_energy``: the number to report."""
+        return relative_error(self.exact_energy, self.final_energy)
 
     @property
     def relative_error(self) -> float:
@@ -302,8 +321,14 @@ def run_vqe(
             "?" if prep.projected_evaluations is None else prep.projected_evaluations,
         )
         opt = optimizer.minimize(objective, x0, callback=objective.on_iteration)
+        final = estimator.evaluate(
+            np.asarray(opt.x, dtype=float)[None, :], shots=cfg.backend.remeasure_shots
+        )
         description = estimator.description
     elapsed = time.perf_counter() - start
+
+    groups = 0 if cfg.backend.is_exact else prep.problem.measurement_groups
+    total_shots = groups * (sum(row.shots or 0 for row in objective.trace) + (final.shots or 0))
 
     best = objective.best
     best_energy = opt.fun if best is None else min(opt.fun, best.energy)
@@ -322,13 +347,17 @@ def run_vqe(
         estimator=description,
         wall_time_s=elapsed,
         optimizer_message=opt.message,
+        final_energy=float(final.energies[0]),
+        final_std=float(final.stds[0]),
+        final_shots=final.shots if not cfg.backend.is_exact else None,
+        total_shots=int(total_shots),
     )
     log.info(
-        "%s finished: E=%.6f (exact %.6f, rel. err %.2e), %d evaluations in %.1fs",
+        "%s finished: E_final=%.6f (exact %.6f, rel. err %.2e), %d evaluations in %.1fs",
         cfg.name,
-        result.energy,
+        result.final_energy,
         result.exact_energy,
-        result.relative_error,
+        result.final_relative_error,
         result.nfev,
         elapsed,
     )

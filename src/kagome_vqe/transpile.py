@@ -46,6 +46,15 @@ class IsaProblem:
     depth: int = 0
     two_qubit_gates: int = 0
 
+    @property
+    def measurement_groups(self) -> int:
+        """Measurement bases needed for one energy: qubit-wise commuting groups of the observable.
+
+        Three for the Heisenberg model (all-X, all-Y, all-Z). One energy evaluation at ``N``
+        shots therefore costs ``measurement_groups * N`` circuit executions.
+        """
+        return len(self.observable.group_commuting(qubit_wise=True))
+
     def stats(self) -> dict[str, object]:
         """Summary for logs and result files."""
         return {
@@ -57,6 +66,7 @@ class IsaProblem:
             "depth": self.depth,
             "two_qubit_gates": self.two_qubit_gates,
             "gate_counts": dict(self.gate_counts),
+            "measurement_groups": self.measurement_groups,
         }
 
 

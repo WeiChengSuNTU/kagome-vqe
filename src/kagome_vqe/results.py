@@ -99,12 +99,17 @@ def new_run_dir(cfg: RunConfig, root: Path | None = None) -> Path:
 def _result_dict(result: VQERunResult) -> dict[str, Any]:
     return {
         "name": result.config.name,
-        "energy": result.energy,
-        "best_energy": result.best_energy,
+        "final_energy": result.final_energy,
+        "final_std": result.final_std,
+        "final_shots": result.final_shots,
+        "final_relative_error": result.final_relative_error,
+        "within_1_percent": result.final_relative_error < 0.01,
         "exact_energy": result.exact_energy,
+        "energy": result.energy,
         "relative_error": result.relative_error,
+        "best_energy": result.best_energy,
         "best_relative_error": result.best_relative_error,
-        "within_1_percent": result.best_relative_error < 0.01,
+        "total_shots": result.total_shots,
         "nfev": result.nfev,
         "nit": result.nit,
         "wall_time_s": result.wall_time_s,
@@ -186,37 +191,46 @@ def load_run(run_dir: Path) -> LoadedRun:
     return LoadedRun(path=run_dir, config=config, result=result, trace=trace, params=params)
 
 
+def _summary_row(run: LoadedRun) -> dict[str, Any]:
+    """One benchmark row; tolerates result files written before the re-measurement existed."""
+    res = run.result
+    final_energy = res.get("final_energy", res["energy"])
+    return {
+        "name": run.name,
+        "ansatz": res["ansatz"],
+        "optimizer": res["optimizer"],
+        "backend": res["backend"],
+        "final_energy": final_energy,
+        "final_std": res.get("final_std", 0.0),
+        "final_shots": res.get("final_shots"),
+        "exact_energy": res["exact_energy"],
+        "final_relative_error": res.get("final_relative_error", res["relative_error"]),
+        "best_energy": res["best_energy"],
+        "two_qubit_gates": res.get("isa", {}).get("two_qubit_gates"),
+        "nfev": res["nfev"],
+        "total_shots": res.get("total_shots", 0),
+        "wall_time_s": res["wall_time_s"],
+        "path": str(run.path),
+    }
+
+
 def write_benchmark_summary(runs: list[LoadedRun], out_dir: Path) -> tuple[Path, Path]:
     """Write ``benchmark.json`` and ``benchmark.md`` (a Markdown table) for a set of runs."""
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-    rows = [
-        {
-            "name": run.name,
-            "ansatz": run.result["ansatz"],
-            "optimizer": run.result["optimizer"],
-            "backend": run.result["backend"],
-            "energy": run.result["energy"],
-            "best_energy": run.result["best_energy"],
-            "exact_energy": run.result["exact_energy"],
-            "relative_error": run.result["relative_error"],
-            "best_relative_error": run.result["best_relative_error"],
-            "nfev": run.result["nfev"],
-            "wall_time_s": run.result["wall_time_s"],
-            "path": str(run.path),
-        }
-        for run in runs
-    ]
+    rows = [_summary_row(run) for run in runs]
     json_path = out_dir / "benchmark.json"
     json_path.write_text(json.dumps(rows, indent=2) + "\n")
     header = (
-        "| run | ansatz | optimizer | backend | final E | best E | exact E | rel. err (best) "
-        "| evaluations | time (s) |\n|---|---|---|---|---|---|---|---|---|---|\n"
+        "| run | ansatz | optimizer | backend | final E (re-measured) | std bound | exact E "
+        "| rel. err | 2q gates | evaluations | total shots | time (s) |\n"
+        "|---|---|---|---|---|---|---|---|---|---|---|---|\n"
     )
     body = "".join(
         f"| {r['name']} | {r['ansatz']} | {r['optimizer']} | {r['backend']} | "
-        f"{r['energy']:.4f} | {r['best_energy']:.4f} | {r['exact_energy']:.4f} | "
-        f"{100 * r['best_relative_error']:.3f} % | {r['nfev']} | {r['wall_time_s']:.1f} |\n"
+        f"{r['final_energy']:.4f} | {r['final_std']:.3f} | {r['exact_energy']:.4f} | "
+        f"{100 * r['final_relative_error']:.3f} % | {r['two_qubit_gates']} | {r['nfev']} | "
+        f"{r['total_shots']:,} | {r['wall_time_s']:.1f} |\n"
         for r in rows
     )
     md_path = out_dir / "benchmark.md"
