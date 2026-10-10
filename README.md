@@ -265,6 +265,9 @@ principle is an artefact.
     infinite-shot limit of +0.5 to +1.3 %, consistent with these numbers.
   - The bias is positive everywhere: the stack under-corrects slightly and never overshoots.
   - It works on each error source separately, so no errors are cancelling.
+  - The highest value, +1.94 % for HVA at the exact parameters, was a fluctuation in the twin
+    measurement. Two reruns with new seeds and 16 repeats give +1.32 ± 0.22 % and
+    +1.14 ± 0.14 %, matching the +1.27 % limit.
   - It costs no extra shots per energy, plus 81,920 one-off shots.
 - **Readout correction plus ZNE is comparable for HVA,** at +1.6 to +1.8 %, but costs three
   times the shots per energy and is worse for RVB. It remains the fallback for ansatzes without

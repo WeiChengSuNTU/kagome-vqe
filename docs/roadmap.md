@@ -406,6 +406,12 @@ Findings and open problems:
   needs a classical simulation (the π/4 grid is not Clifford), the same 20-qubit limit.
 - **Symmetry filtering and ZNE must not be combined.** They over-correct by about 8 % even with
   gate noise alone.
+- **The one 2.7-sigma case was a twin fluctuation.** HVA at the exact parameters read
+  +1.94 ± 0.25 % against an exact limit of +1.27 %. The documentation worktree traced it to the
+  twin (z = -2.9), not the target (z = 0.8). Reruns with seeds 1001 and 2002, 16 repeats each,
+  give +1.32 ± 0.22 % and +1.14 ± 0.14 %, with the twin back at -10.832 and -10.806 (exact
+  -10.822). Under gate noise alone the same seeds give +1.34 % and +1.21 %. A full-noise
+  systematic from finite calibration, if any, is below about 0.2 %.
 - **The bootstrap standard error of correct-then-filter matches the spread between repeats,**
   within the precision 8 repeats allow (ratios 0.6 to 1.7).
 - **The benchmark instance is still easy (M3).** The exact-parameter state is a product of
