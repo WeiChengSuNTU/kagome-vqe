@@ -353,16 +353,17 @@ Original plan:
 
 ### M2. Error-mitigation baseline (done, revised)
 
-**Status, October 2026.** Code in `c9272e3` (techniques) and `56aadd3` (correct-then-filter,
-noise-source switch). Results in `results/m2b-evaluation-0`, `results/m2b-evaluation-0p3`,
-`results/m2b_readout-evaluation-0p3`, `results/m2b_gates-evaluation-0p3` and
-`results/m2b_vqe-summary`. Full tables are in the README under "Error mitigation".
+**Status, October 2026.** Code in `c9272e3` (techniques), `56aadd3` (correct-then-filter,
+noise-source switch) and `2116da4` (one-off measurements redone per repeat). Results in
+`results/m2c-evaluation-0`, `results/m2c-evaluation-0p3`, `results/m2c_readout-evaluation-0p3`,
+`results/m2c_gates-evaluation-0p3` and `results/m2b_vqe-summary`. Full tables are in the README
+under "Error mitigation".
 
 | check | result |
 |---|---|
 | each technique implemented as a composable estimator layer | readout correction and symmetry filtering (counts level), ZNE, twin rescaling; unit-tested |
 | energy at fixed points, per stack | 10 stacks x 2 ansatzes x 2 points, 8 repeats; plus readout-only and gate-only noise at θ = 0.3 |
-| gap closed and variance cost | readout + symmetry + twin: bias at most 0.43 % in every noise setting, no extra shots per energy, 81,920 one-off shots |
+| gap closed and variance cost | readout + symmetry + twin: bias +0.4 to +1.9 % sampled under full noise, +0.6 % on gate noise alone, about 0 on readout noise alone; exact infinite-shot limit +0.5 to +1.3 %; no extra shots per energy, 81,920 one-off shots |
 | mitigation stack chosen for hardware | readout correction, then symmetry filtering, then twin rescaling; readout + ZNE as the fallback for non-singlet ansatzes |
 | H1 hardware check | skipped for now, as with H0 |
 
@@ -379,8 +380,18 @@ worktree found, and an independent check confirmed, that this was two errors can
   readout to gate error, or after compression reduces the gate error, the stack would have
   overshot.
 
-The lesson for every later milestone: check a mitigation method against each error source
-separately (`backend.noise = "readout"` / `"gates"`), not only against the full model.
+**A second correction followed.** The rerun measured the readout calibration and the twin once
+and shared them across all 8 repeats. The spread between repeats then hid their noise, and the
+study claimed a bias of at most 0.43 %. The documentation worktree's exact, infinite-shot
+analysis put the limit at +0.5 to +1.3 %. Commit `2116da4` redoes every one-off measurement in
+each repeat, and the corrected numbers above agree with the exact limit.
+
+Two lessons for every later milestone:
+
+- **Check mitigation against each error source separately** (`backend.noise = "readout"` /
+  `"gates"`), not only against the full model.
+- **Repeat everything a method measures,** including calibration and reference circuits, when
+  estimating its error.
 
 Findings and open problems:
 
@@ -389,7 +400,9 @@ Findings and open problems:
   renormalises. That caps it at about 20 qubits; larger lattices need a sector-restricted
   version.
 - **Twin rescaling works after filtering, even for HVA.** The residual noise inside the singlet
-  sector damps states almost uniformly, the assumption rescaling needs. The automatic twin
+  sector damps states much more uniformly: the documentation worktree measured the mismatch
+  between HVA states falling from 4.7 % to 1.3 %. The remaining mismatch is the residual
+  positive bias. The automatic twin
   needs a classical simulation (the π/4 grid is not Clifford), the same 20-qubit limit.
 - **Symmetry filtering and ZNE must not be combined.** They over-correct by about 8 % even with
   gate noise alone.

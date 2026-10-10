@@ -229,43 +229,57 @@ simulation costs about 2.5 s per energy and HVA parameter shift needs 72 energie
 
 Produced by `kagome-vqe benchmark configs/m2_mitigation.toml --point 0 --repeats 8` and
 `--point 0.3`, plus `--set backend.noise=readout` and `--set backend.noise=gates` to apply one
-error source at a time. Each cell gives the relative bias of the mean against the noise-free
-energy, in %, for HVA / RVB, from 8 repeats at 4096 shots per basis on `FakeGuadalupeV2`. The
-spread between repeats is 0.03 to 0.15 in energy. ⚠ marks a mean significantly below -18, which
-by the variational principle is an artefact.
+error source at a time. Each cell is the relative bias of the mean against the noise-free energy,
+in %, with its standard error, on `FakeGuadalupeV2` at 4096 shots per basis. Every repeat builds
+its own estimator, so one-off measurements (readout calibration, twin) are redone and their
+noise is part of the error. ⚠ marks a mean significantly below -18, which by the variational
+principle is an artefact.
 
 | stack | full noise, exact params | full noise, θ = 0.3 | readout noise only, θ = 0.3 | gate noise only, θ = 0.3 | shots per energy | one-off shots |
 |---|---|---|---|---|---|---|
-| none | +28.91 / +29.41 | +28.56 / +28.97 | +8.02 / +8.44 | +22.15 / +22.38 | 12,288 | 0 |
-| readout | +22.12 / +22.72 | +22.07 / +22.33 | -0.03 / -0.02 | +22.04 / +22.33 | 12,288 | 32,768 |
-| symmetry | +8.67 / +9.03 | +7.89 / +8.54 | +0.69 / +0.69 | +4.46 / +4.99 | 12,288 | 0 |
-| readout+symmetry | +5.02 / +5.18 | +4.08 / +4.75 | -0.07 / +0.06 | +4.30 / +4.91 | 12,288 | 32,768 |
-| zne | +10.25 / +10.11 | +9.49 / +9.24 | +8.02 / +8.44 | +1.45 / +0.88 | 36,864 | 0 |
-| readout+zne | +1.73 / +1.66 | +1.40 / +0.92 | -0.03 / -0.02 | +1.39 / +0.94 | 36,864 | 98,304 |
-| readout+symmetry+zne | -7.62⚠ / -7.82⚠ | -8.14 / -8.19⚠ | -0.07 / +0.06 | -7.51 / -7.72⚠ | 36,864 | 98,304 |
-| twin | -5.72⚠ / -0.20 | -6.20 / -0.61 | -0.79 / +0.43 | -5.29 / -1.14 | 12,288 | 49,152 |
-| readout+twin | -5.45⚠ / -0.81⚠ | -5.56 / -1.19 | -0.66 / -0.07 | -5.14 / -1.01 | 12,288 | 81,920 |
-| **readout+symmetry+twin** | +0.27 / +0.36 | -0.34 / -0.15 | -0.06 / -0.06 | +0.27 / +0.43 | 12,288 | 81,920 |
+| none (HVA) | +29.08 ± 0.12 | +28.40 ± 0.15 | +8.17 ± 0.16 | +21.96 ± 0.15 | 12,288 | 0 |
+| none (RVB) | +29.27 ± 0.09 | +29.21 ± 0.19 | +8.45 ± 0.13 | +22.66 ± 0.13 | 12,288 | 0 |
+| readout (HVA) | +22.11 ± 0.18 | +22.11 ± 0.19 | +0.12 ± 0.13 | +22.07 ± 0.15 | 12,288 | 32,768 |
+| readout (RVB) | +22.50 ± 0.17 | +22.24 ± 0.19 | -0.03 ± 0.09 | +22.28 ± 0.15 | 12,288 | 32,768 |
+| symmetry (HVA) | +8.64 ± 0.09 | +8.01 ± 0.15 | +0.60 ± 0.11 | +4.46 ± 0.16 | 12,288 | 0 |
+| symmetry (RVB) | +8.97 ± 0.13 | +8.84 ± 0.14 | +0.74 ± 0.05 | +4.96 ± 0.11 | 12,288 | 0 |
+| readout+symmetry (HVA) | +5.10 ± 0.10 | +4.38 ± 0.22 | -0.01 ± 0.12 | +4.37 ± 0.16 | 12,288 | 32,768 |
+| readout+symmetry (RVB) | +5.24 ± 0.14 | +4.90 ± 0.24 | -0.03 ± 0.05 | +4.96 ± 0.11 | 12,288 | 32,768 |
+| zne (HVA) | +10.79 ± 0.21 | +9.05 ± 0.20 | +8.17 ± 0.16 | +0.96 ± 0.19 | 36,864 | 0 |
+| zne (RVB) | +9.87 ± 0.20 | +9.99 ± 0.24 | +8.45 ± 0.13 | +1.63 ± 0.18 | 36,864 | 0 |
+| readout+zne (HVA) | +1.81 ± 0.31 | +1.60 ± 0.25 | +0.12 ± 0.13 | +1.57 ± 0.17 | 36,864 | 98,304 |
+| readout+zne (RVB) | +1.44 ± 0.19 | +1.07 ± 0.30 | -0.03 ± 0.09 | +1.13 ± 0.23 | 36,864 | 98,304 |
+| readout+symmetry+zne (HVA) | -7.33 ± 0.28 ⚠ | -7.27 ± 0.25 | -0.01 ± 0.12 | -7.32 ± 0.22 | 36,864 | 98,304 |
+| readout+symmetry+zne (RVB) | -7.69 ± 0.20 ⚠ | -7.79 ± 0.38 ⚠ | -0.03 ± 0.05 | -7.59 ± 0.17 ⚠ | 36,864 | 98,304 |
+| twin (HVA) | -4.77 ± 0.47 ⚠ | -5.48 ± 0.39 | -0.58 ± 0.29 | -4.82 ± 0.37 | 12,288 | 49,152 |
+| twin (RVB) | -0.61 ± 0.18 ⚠ | -0.91 ± 0.23 | +0.59 ± 0.12 | -1.41 ± 0.25 | 12,288 | 49,152 |
+| readout+twin (HVA) | -4.78 ± 0.20 ⚠ | -4.62 ± 0.32 | -0.19 ± 0.22 | -4.83 ± 0.32 | 12,288 | 81,920 |
+| readout+twin (RVB) | -1.23 ± 0.24 ⚠ | -1.36 ± 0.18 | +0.05 ± 0.18 | -1.40 ± 0.21 | 12,288 | 81,920 |
+| **readout+symmetry+twin** (HVA) | +1.94 ± 0.25 | +1.06 ± 0.31 | -0.23 ± 0.22 | +0.63 ± 0.24 | 12,288 | 81,920 |
+| **readout+symmetry+twin** (RVB) | +0.53 ± 0.17 | +0.35 ± 0.18 | -0.08 ± 0.06 | +0.56 ± 0.12 | 12,288 | 81,920 |
 
-- **Chosen stack: readout correction, then symmetry filtering, then twin rescaling.** Its bias
-  is at most 0.43 % in every setting: full noise at both points, readout noise only and gate
-  noise only. A method that works on each error source separately is not relying on errors
-  cancelling. It costs no extra shots per energy, plus 81,920 one-off shots (readout
-  calibration and twin).
-- **Why the twin works after filtering.** Filtering leaves only noise inside the singlet sector.
-  That residual appears to damp every singlet state by about the same factor, which is exactly
-  what rescaling assumes. Without the filter, HVA's twin overshoots by 5 to 6 %.
-- **Readout correction plus symmetry filtering alone leaves a 4 to 5 % gate-noise residual,**
-  which the filter cannot see. Its standard error comes from a bootstrap over shots and agrees
-  with the spread between repeats.
-- **Fallback for ansatzes without the singlet symmetry: readout correction plus ZNE,** at 0.9
-  to 1.7 % bias in every setting and three times the shots per energy.
-- **Never combine symmetry filtering with ZNE.** Post-selection removes noise
-  non-multiplicatively, and the extrapolation over-corrects by about 8 % even with gate noise
-  alone.
-- **Limits.** Correct-then-filter works on the full outcome distribution, which caps it at about
-  20 qubits. The automatic twin needs a classical simulation, which has the same limit. Both
-  need replacing before larger lattices (M3).
+- **Chosen stack: readout correction, then symmetry filtering, then twin rescaling.**
+  - Its bias is +0.4 to +1.9 % under full noise, +0.6 % with gate noise alone and about 0 with
+    readout noise alone.
+  - The documentation worktree's exact density-matrix analysis, with no sampling, gives an
+    infinite-shot limit of +0.5 to +1.3 %, consistent with these numbers.
+  - The bias is positive everywhere: the stack under-corrects slightly and never overshoots.
+  - It works on each error source separately, so no errors are cancelling.
+  - It costs no extra shots per energy, plus 81,920 one-off shots.
+- **Readout correction plus ZNE is comparable for HVA,** at +1.6 to +1.8 %, but costs three
+  times the shots per energy and is worse for RVB. It remains the fallback for ansatzes without
+  the singlet symmetry.
+- **Why the twin works after filtering.** The filter leaves only noise inside the singlet sector,
+  which damps different states much more uniformly. The documentation worktree measured the
+  mismatch in damping between HVA states falling from 4.7 % to 1.3 %: much more uniform, though
+  not exactly. The remaining mismatch is the residual bias.
+- **Readout correction plus symmetry filtering alone leaves a 4 to 5 % gate-noise residual**
+  that the filter cannot see.
+- **Never combine symmetry filtering with ZNE.** It over-corrects by about 7 % even with gate
+  noise alone.
+- **Limits.** Correct-then-filter works on the full outcome distribution and the automatic twin
+  needs a classical simulation. Both cap at about 20 qubits and need replacing before larger
+  lattices (M3).
 
 The chosen stack in a full optimisation (`configs/m2_mitigated_vqe.toml`), with the
 M1-recommended optimisers, on full `FakeGuadalupeV2` noise:
@@ -275,21 +289,27 @@ M1-recommended optimisers, on full `FakeGuadalupeV2` noise:
 | HVA, plain SPSA | -17.958 ± 0.116 | 0.23 % | -17.995 | 1,372,160 |
 | RVB, ADAM with parameter shift | -17.898 ± 0.068 | 0.57 % | -17.961 | 1,608,704 |
 
-Unmitigated, these runs end near -12.7 (29 % error). Neither reading lies below -18.
+Unmitigated, these runs end near -12.7 (29 % error). Neither reading lies below -18; the
+error bars include the twin's uncertainty, since a single run measures its twin once.
 
-**Correction history.** The first M2 result (commit `c9272e3`) recommended readout plus symmetry
-alone, applied in the opposite order: filter first, then correct each shot. The documentation
-worktree showed that this was two errors cancelling. With readout noise alone, it over-corrected
-by about 9 % (-19.57 instead of -18). Under full noise that over-correction happened to cancel
-the gate-noise residual on this device. Commit `56aadd3` reversed the order and added the
-noise-source switch. The original results remain in `results/m2-evaluation-*` and
-`results/m2_vqe-summary`.
+**Correction history.** The M2 result was corrected twice, both times after the documentation
+worktree recomputed it exactly.
+
+1. **Commit `c9272e3`** recommended readout plus symmetry, applied filter-first. With readout
+   noise alone it over-corrected by about 9 % (-19.57 instead of -18). Under full noise that
+   happened to cancel the gate-noise residual on this device. Commit `56aadd3` switched to
+   correct-then-filter and added the noise-source switch.
+2. **The follow-up study measured the readout calibration and the twin once** and shared them
+   across repeats, so its spread hid their noise and it claimed a bias of at most 0.43 %.
+   Commit `2116da4` redoes them in every repeat; the tables above come from that run.
+
+Earlier results remain in `results/m2-*` and `results/m2b-*`.
 
 ## Roadmap
 
 Unmitigated noisy runs plateau near -12.7 because of circuit and readout noise. Milestones M0
 (an honest noisy simulator), M1 (better gradients) and M2 (error mitigation, which brings the
-bias below 0.5 % on every error source separately) are done. [`docs/roadmap.md`](docs/roadmap.md) records the
+bias to about 1 % without relying on errors cancelling) are done. [`docs/roadmap.md`](docs/roadmap.md) records the
 diagnosis, the improvement directions (parameter-shift gradients, depth compression, error
 mitigation, subspace methods such as QSE and Krylov diagonalisation) and the milestone plan.
 
