@@ -1,0 +1,70 @@
+# Roadmap M1: which gradient gives the most precision per shot?
+#
+# Every combo spends the same 24576 shots per measurement basis per iteration, split evenly over
+# the energies its gradient needs (shots = 24576 / energies per gradient). All gradient methods
+# share the same update rule, ADAM with lr = 0.05, so differences come from the gradients alone;
+# plain SPSA with its own update rule is the baseline. The metric is the noise-free energy of
+# the parameters reached (ideal_trace.csv, ideal_vs_shots.png), not the noisy measured energy.
+# This config isolates shot noise: aer_ideal has no gate or readout noise.
+name = "m1_ideal"
+seeds = [1, 2, 3, 4, 5]
+x0_scale = 0.7853981633974483   # pi / 4, the paper's start
+record_params = false
+track_ideal_energy = true
+
+[backend]
+kind = "aer_ideal"
+shots = 4096                    # overridden per combo below
+final_shots = 16384
+
+[[combos]]
+ansatz = { type = "hva" }
+label = "hva_adam_forward"
+optimizer = { type = "adam", maxiter = 40, lr = 0.05, gradient = "forward", fd_eps = 0.1 }
+shots = 8192   # 3 energies per gradient
+
+[[combos]]
+ansatz = { type = "hva" }
+optimizer = { type = "adam", maxiter = 40, lr = 0.05, gradient = "central", fd_eps = 0.1 }
+shots = 4915   # 5 energies per gradient
+
+[[combos]]
+ansatz = { type = "hva" }
+optimizer = { type = "adam", maxiter = 40, lr = 0.05, gradient = "spsa", perturbation = 0.1 }
+shots = 12288   # 2 energies per gradient
+
+[[combos]]
+ansatz = { type = "hva" }
+optimizer = { type = "adam", maxiter = 40, lr = 0.05, gradient = "parameter_shift" }
+shots = 341   # 72 energies per gradient
+
+[[combos]]
+ansatz = { type = "hva" }
+optimizer = { type = "spsa", maxiter = 40, lr = 0.01, perturbation = 0.1 }
+shots = 12288   # plain SPSA baseline, 2 energies per step
+
+[[combos]]
+ansatz = { type = "rvb" }
+label = "rvb_adam_forward"
+optimizer = { type = "adam", maxiter = 40, lr = 0.05, gradient = "forward", fd_eps = 0.1 }
+shots = 1890   # 13 energies per gradient
+
+[[combos]]
+ansatz = { type = "rvb" }
+optimizer = { type = "adam", maxiter = 40, lr = 0.05, gradient = "central", fd_eps = 0.1 }
+shots = 983   # 25 energies per gradient
+
+[[combos]]
+ansatz = { type = "rvb" }
+optimizer = { type = "adam", maxiter = 40, lr = 0.05, gradient = "spsa", perturbation = 0.1 }
+shots = 12288   # 2 energies per gradient
+
+[[combos]]
+ansatz = { type = "rvb" }
+optimizer = { type = "adam", maxiter = 40, lr = 0.05, gradient = "parameter_shift" }
+shots = 1024   # 24 energies per gradient
+
+[[combos]]
+ansatz = { type = "rvb" }
+optimizer = { type = "spsa", maxiter = 40, lr = 0.01, perturbation = 0.1 }
+shots = 12288   # plain SPSA baseline, 2 energies per step

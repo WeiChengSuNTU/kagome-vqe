@@ -8,6 +8,17 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- Roadmap M1: gradient estimators separate from update rules (`optimizers.gradients`):
+  forward and central differences, simultaneous perturbation, and parameter shift.
+  `optimizer.gradient` selects one for ADAM or the new plain gradient descent (`type = "gd"`);
+  ADAM with `gradient = "spsa"` is the SPSA-ADAM hybrid.
+- Parameter shift per gate occurrence: `ansatz.unshare.unshare_parameters` and `ParameterMap`
+  compile the ansatz with one parameter per gate and sum the derivatives per ansatz parameter.
+- Noise-free tracking: every run records the statevector energy of its parameters after each
+  iteration against shots spent (`ideal_trace.csv`, `ideal_energy` in `result.json`).
+- Benchmarks: repeated `seeds`, per-combo `shots`, aggregated tables, and
+  `ideal_vs_shots.png`. New configs `m1_gradients_ideal.toml` and `m1_gradients_noisy.toml`.
+
 - `docs/roadmap.md`: diagnosis of the noisy-energy floor, improvement directions
   (parameter-shift gradients, depth compression, error mitigation, subspace methods) and the
   milestone plan M0 to M5 with benchmark checks.

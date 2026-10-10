@@ -248,16 +248,27 @@ def plot(
     out: Annotated[Path, typer.Option(help="Output image path.")] = Path("convergence.png"),
     axis: Annotated[str, typer.Option(help="'iteration' or 'evaluation'.")] = "iteration",
     title: Annotated[str | None, typer.Option(help="Figure title.")] = None,
+    kind: Annotated[
+        str, typer.Option(help="'convergence' (measured energy) or 'ideal' (noise-free vs shots).")
+    ] = "convergence",
 ) -> None:
-    """Plot energy-versus-iteration for one or more saved runs."""
-    from kagome_vqe.plotting import plot_runs
+    """Plot saved runs: measured energy per iteration, or noise-free error against shots."""
+    from kagome_vqe.plotting import plot_ideal_vs_shots, plot_runs
     from kagome_vqe.results import load_run
 
     if axis not in ("iteration", "evaluation"):
         msg = "--axis must be 'iteration' or 'evaluation'"
         raise typer.BadParameter(msg)
+    if kind not in ("convergence", "ideal"):
+        msg = "--kind must be 'convergence' or 'ideal'"
+        raise typer.BadParameter(msg)
     runs = [load_run(p) for p in results]
-    plot_runs(runs, axis=axis, out=out, title=title)  # type: ignore[arg-type]
+    if kind == "ideal":
+        if plot_ideal_vs_shots(runs, out=out, title=title) is None:
+            msg = "none of these runs recorded a noise-free trace"
+            raise typer.BadParameter(msg)
+    else:
+        plot_runs(runs, axis=axis, out=out, title=title)  # type: ignore[arg-type]
     console.print(f"wrote {out}")
 
 

@@ -271,7 +271,7 @@ These matter only once the bias is reduced, but they are cheap.
 Each milestone has a benchmark check that must pass before the next builds on it. Hardware
 checkpoints are marked; the rest runs on simulators.
 
-### M0. Honest noisy simulation (done except H0)
+### M0. Honest noisy simulation (done)
 
 **Status, October 2026.** Code in commit `0433fd7`; results in
 `results/statevector_m0-summary` and `results/fake_guadalupe_m0-summary`.
@@ -283,7 +283,7 @@ checkpoints are marked; the rest runs on simulators.
 | readout error alone moves the energy | -18.00 to -16.43 at the exact parameters; unit-tested |
 | RVB + ADAM no longer climbs | final -12.72, at the floor; previously drifted to -10.8 |
 | new noisy baseline in the README | done |
-| H0 hardware run | not run: needs IBM credentials in `.env` and device time |
+| H0 hardware run | skipped for now at the group's request; the IBM code path is kept and tested in local mode |
 
 Two findings to carry forward:
 
@@ -310,7 +310,37 @@ Original plan:
 - **Hardware checkpoint H0:** one HVA + SPSA run on a current IBM device using
   `configs/ibm_hva_spsa.toml`, to calibrate expectations against the fake backend.
 
-### M1. Better gradients
+### M1. Better gradients (done)
+
+**Status, October 2026.** Code in commit `1a27c28`; results in `results/m1_ideal-summary` and
+`results/m1_noisy-summary`; the full table is in the README under "Gradient comparison".
+
+| check | result |
+|---|---|
+| parameter shift matches finite differences without noise | to about 1e-9, for HVA, RVB and `real_amplitudes`; unit-tested |
+| energies per gradient | 72 for HVA, 24 for RVB; unit-tested |
+| unsharing changes the circuit | no: same two-qubit gate count (66 on Guadalupe) |
+| equal-budget comparison | 5 seeds without gate noise, 1 seed on FakeGuadalupeV2 noise (RVB) |
+| recommended default per ansatz | RVB: ADAM with parameter shift. HVA: plain SPSA |
+
+Measured at equal shots per iteration, as noise-free error of the final parameters:
+
+- **RVB, ADAM with parameter shift:** 0.022 % with shot noise only, 0.079 % on noisy Guadalupe.
+- **RVB, the paper's forward differences:** 0.15 % and 0.50 % in the same two settings.
+- **HVA, plain SPSA:** 0.001 %, against 0.11 to 0.25 % for every ADAM variant.
+
+Follow-ups this milestone uncovered:
+
+- **ADAM's step size, not its gradient, limits HVA.** With a fixed `lr = 0.05` every ADAM
+  variant plateaus near 0.1 %. A decaying learning rate should be tried before concluding
+  that SPSA is intrinsically better for HVA.
+- **RVB had not converged when the budget ran out.** Its ADAM curves are still falling at
+  three million shots, so longer runs may reorder the close finishers.
+- **The noisy check used one seed.** Repeat it with more seeds before relying on the
+  smaller differences.
+
+Original plan:
+
 
 - **Deliverables:**
   - Unshared-parameter build mode.

@@ -1,4 +1,6 @@
 # RVB + SPSA on a noisy simulation of ibmq_guadalupe (the 2022 challenge device).
+# Kept as the paper's baseline. Roadmap M1 found plain SPSA the least precise choice for RVB at
+# an equal shot budget; use configs/fake_guadalupe_rvb_adam_ps.toml for the recommended setup.
 # `aer_noisy` imports the fake backend's calibration data into Aer; `initial_layout` is the
 # 12-qubit heavy-hex loop so the ring gates need no routing SWAPs.
 name = "fake_guadalupe_rvb_spsa"

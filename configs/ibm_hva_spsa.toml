@@ -1,5 +1,8 @@
 # HVA + SPSA on real IBM Quantum hardware.
 #
+# Roadmap M1 recommends plain SPSA for HVA: with only 2 parameters it reached the most precise
+# parameters at an equal shot budget, while parameter shift would cost 72 energies per step.
+#
 # Credentials come from the environment (see .env.example). Pick the device at the command line:
 #   kagome-vqe run configs/ibm_hva_spsa.toml --set backend.name='"ibm_torino"'
 # Rehearse the identical code path offline first:

@@ -101,47 +101,58 @@ def plot_ideal_vs_shots(
     (circuit shots over all measurement bases), the y-axis is how far the *parameters* are
     from the ground state, unaffected by the noise floor. Runs sharing a combo label (repeated
     seeds) are drawn as a median line with a min-max band, on a common log-spaced shot grid.
+    Each ansatz gets its own panel.
 
     Returns:
         The figure, or ``None`` if no run recorded an ideal trace.
     """
-    groups: dict[str, list[LoadedRun]] = {}
+    panels: dict[str, dict[str, list[LoadedRun]]] = {}
     for run in runs:
         if run.ideal_trace is not None and len(run.ideal_trace) > 1:
-            groups.setdefault(run.combo, []).append(run)
-    if not groups:
+            ansatz = str(run.result.get("ansatz", "runs"))
+            panels.setdefault(ansatz, {}).setdefault(run.combo, []).append(run)
+    if not panels:
         return None
-    fig, ax = plt.subplots(figsize=(8, 5))
-    for combo, group in groups.items():
-        exact = float(group[0].result["exact_energy"])
-        max_shots = max(float(r.ideal_trace["shots"].iloc[-1]) for r in group)  # type: ignore[index]
-        min_shots = min(float(r.ideal_trace["shots"].iloc[1]) for r in group)  # type: ignore[index]
-        grid = np.geomspace(max(min_shots, 1.0), max(max_shots, 2.0), 60)
-        curves = []
-        for run in group:
-            trace = run.ideal_trace
-            assert trace is not None
-            err = np.maximum(trace["ideal_energy"].to_numpy(float) - exact, 1e-12)
-            # error after spending s shots = error of the last iterate reached by s
-            idx = np.searchsorted(trace["shots"].to_numpy(float), grid, side="right") - 1
-            curves.append(err[np.clip(idx, 0, len(err) - 1)])
-        stack = np.vstack(curves)
-        (line,) = ax.plot(grid, np.median(stack, axis=0), lw=2, label=f"{combo} (n={len(group)})")
-        if len(group) > 1:
-            ax.fill_between(
-                grid, stack.min(axis=0), stack.max(axis=0), color=line.get_color(), alpha=0.15
-            )
-    ax.set_xscale("log")
-    ax.set_yscale("log")
-    ax.set_xlabel("Shots spent (all measurement bases)")
-    ax.set_ylabel("Noise-free energy error of current parameters")
+    fig, axes = plt.subplots(
+        1, len(panels), figsize=(7 * len(panels), 5), squeeze=False, sharey=True
+    )
+    for ax, (ansatz, groups) in zip(axes[0], panels.items(), strict=True):
+        for combo, group in groups.items():
+            _ideal_band(ax, combo, group)
+        ax.set_xscale("log")
+        ax.set_yscale("log")
+        ax.set_xlabel("Shots spent (all measurement bases)")
+        ax.set_title(ansatz.upper())
+        ax.grid(alpha=0.3, which="both")
+        ax.legend(fontsize=8)
+    axes[0][0].set_ylabel("Noise-free energy error of current parameters")
     if title:
-        ax.set_title(title)
-    ax.grid(alpha=0.3, which="both")
-    ax.legend(fontsize=8)
+        fig.suptitle(title)
     fig.tight_layout()
     if out is not None:
         out = Path(out)
         out.parent.mkdir(parents=True, exist_ok=True)
         fig.savefig(out, dpi=150)
     return fig
+
+
+def _ideal_band(ax: Any, combo: str, group: list[LoadedRun]) -> None:
+    """Median and min-max band of the noise-free error over the runs of one combo."""
+    traces = [r.ideal_trace for r in group if r.ideal_trace is not None]
+    exact = float(group[0].result["exact_energy"])
+    max_shots = max(float(t["shots"].iloc[-1]) for t in traces)
+    min_shots = min(float(t["shots"].iloc[1]) for t in traces)
+    grid = np.geomspace(max(min_shots, 1.0), max(max_shots, 2.0), 60)
+    curves = []
+    for trace in traces:
+        err = np.maximum(trace["ideal_energy"].to_numpy(float) - exact, 1e-12)
+        # error after spending s shots = error of the last iterate reached by s
+        idx = np.searchsorted(trace["shots"].to_numpy(float), grid, side="right") - 1
+        curves.append(err[np.clip(idx, 0, len(err) - 1)])
+    stack = np.vstack(curves)
+    label = combo.split("-", 1)[-1]
+    (line,) = ax.plot(grid, np.median(stack, axis=0), lw=2, label=f"{label} (n={len(group)})")
+    if len(group) > 1:
+        ax.fill_between(
+            grid, stack.min(axis=0), stack.max(axis=0), color=line.get_color(), alpha=0.12
+        )

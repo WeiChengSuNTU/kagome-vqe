@@ -181,8 +181,9 @@ see through shot noise. Those are exactly the knobs `BackendConfig` exposes.
   `SWAP/2` has eigenvalues `+-1/2`, so the two-term rule gives RVB's exact gradient from 24
   energies. In HVA each parameter is shared by 18 rotations: the rule applies per occurrence
   and the occurrences are summed (72 energies), because the summed generator has many
-  eigenvalues. Only the legacy eSWAP, with its controlled rotation, needs a longer rule. The
-  package currently implements finite differences only (`fd_eps`, raised to ~0.1 under shot
-  noise); see `docs/roadmap.md` for the cost and noise comparison.
+  eigenvalues. Only the legacy eSWAP, with its controlled rotation, needs a longer rule.
+  Select it with `optimizer.gradient = "parameter_shift"`: the circuit is then compiled with
+  one parameter per gate (`kagome_vqe.ansatz.unshare`), which leaves the gate count
+  unchanged. See `docs/roadmap.md`, milestone M1, for the measured cost and precision.
 * **Error mitigation studies.** `resilience_level`, `shots` and `initial_layout` are per-run
   config; a benchmark config with several `[[combos]]` can sweep them.

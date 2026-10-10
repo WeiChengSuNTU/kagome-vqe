@@ -17,6 +17,7 @@ from kagome_vqe.config import (
     apply_overrides,
     load_benchmark_config,
     load_run_config,
+    load_toml,
     parse_override,
 )
 from kagome_vqe.lattice import KAGOME_HAMILTONIAN_CYCLE
@@ -37,9 +38,9 @@ def test_defaults_reproduce_the_paper() -> None:
 
 @pytest.mark.parametrize("path", sorted(CONFIGS.glob("*.toml")), ids=lambda p: p.name)
 def test_shipped_configs_parse(path: Path) -> None:
-    if path.name.startswith("benchmark"):
+    if "combos" in load_toml(path):
         bench = load_benchmark_config(path)
-        assert len(bench.run_configs()) == 4
+        assert len(bench.run_configs()) >= 4
     else:
         load_run_config(path)
 

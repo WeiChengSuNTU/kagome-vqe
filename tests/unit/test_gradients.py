@@ -5,9 +5,11 @@ from pathlib import Path
 import numpy as np
 import pytest
 from qiskit.quantum_info import SparsePauliOp
+from typer.testing import CliRunner
 
 from kagome_vqe.ansatz import Ansatz, HVAnsatz, LibraryAnsatz, RVBAnsatz
 from kagome_vqe.ansatz.unshare import ParameterMap, unshare_parameters
+from kagome_vqe.cli import app
 from kagome_vqe.config import (
     AnsatzConfig,
     BackendConfig,
@@ -255,3 +257,9 @@ def test_aggregate_summary_and_ideal_plot(tmp_path: Path) -> None:
     fig = plot_ideal_vs_shots(runs, out=tmp_path / "ideal.png")
     assert fig is not None
     assert (tmp_path / "ideal.png").exists()
+    cli = CliRunner().invoke(
+        app,
+        ["plot", *(str(r.path) for r in runs), "--kind", "ideal", "--out", str(tmp_path / "c.png")],
+    )
+    assert cli.exit_code == 0, cli.output
+    assert (tmp_path / "c.png").exists()

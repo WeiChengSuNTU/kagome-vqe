@@ -1,0 +1,26 @@
+# RVB with ADAM and parameter-shift gradients: the roadmap M1 recommendation for RVB.
+#
+# At an equal shot budget, parameter shift gave RVB the most precise parameters: noise-free
+# error 0.022 % without gate noise (5 seeds) and 0.079 % on FakeGuadalupeV2 noise, against
+# 0.15 % and 0.50 % for the paper's forward differences. Each RVB parameter drives one eSWAP,
+# so a gradient costs 24 energies; spend fewer shots per energy than with SPSA.
+name = "fake_guadalupe_rvb_adam_ps"
+seed = 42
+x0_scale = 0.7853981633974483
+
+[ansatz]
+type = "rvb"
+
+[optimizer]
+type = "adam"
+gradient = "parameter_shift"
+maxiter = 40
+lr = 0.05
+
+[backend]
+kind = "aer_noisy"
+name = "FakeGuadalupeV2"
+shots = 1024
+final_shots = 16384
+optimization_level = 3
+initial_layout = [1, 2, 3, 5, 8, 11, 14, 13, 12, 10, 7, 4]

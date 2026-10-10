@@ -77,6 +77,25 @@ Whatever the backend, the ansatz is transpiled with `generate_preset_pass_manage
 Hamiltonian is moved onto the chosen physical qubits with `observable.apply_layout`, so the
 energy is the same as on the logical circuit up to noise. This is verified in the test suite.
 
+## Optimisers and gradients
+
+`optimizer.type` picks the update rule and `optimizer.gradient` how ADAM and plain gradient
+descent obtain their gradient:
+
+| setting | energies per iteration | notes |
+|---|---|---|
+| `type = "spsa"` | 2 | SPSA's own update rule; `lr` and `perturbation` |
+| `type = "adam"`, `gradient = "forward"` | n + 1 | the paper's ADAM; `fd_eps` must be ~0.1 under shot noise |
+| `type = "adam"`, `gradient = "central"` | 2n + 1 | less bias than forward differences |
+| `type = "adam"`, `gradient = "spsa"` | 2 | SPSA-ADAM hybrid |
+| `type = "adam"`, `gradient = "parameter_shift"` | 2K | exact up to shot noise; K = 36 for HVA, 12 for RVB |
+| `type = "gd"` | as for its gradient | plain gradient descent, a control for comparing gradients |
+| `type = "scipy"` | method dependent | COBYLA, Powell, ...; one energy per call, no batching |
+
+Every run also records the noise-free energy of its parameters after each iteration
+(`track_ideal_energy`, on by default up to 20 qubits). On noisy backends this shows how good the
+parameters are, separately from the noise floor.
+
 ## Results directory
 
 Each run writes `results/<UTC timestamp>-<name>/`:
@@ -87,6 +106,7 @@ Each run writes `results/<UTC timestamp>-<name>/`:
 | `result.json` | re-measured final energy and its relative error, exact energy, total shots, parameters, ISA stats, timings |
 | `trace.csv` | one row per energy evaluation: `eval_idx, iteration, energy, std, shots, wall_time_s, job_id` |
 | `params.npy` | parameters of every evaluation, shape `(nfev, n)` (when `record_params = true`) |
+| `ideal_trace.csv` | noise-free energy of the parameters after every iteration, with shots spent |
 | `environment.json` | package versions, Python, platform, git commit and dirty flag |
 | `run.log` | the log of the run |
 
@@ -143,10 +163,42 @@ get below this floor; closing the gap is the job of error mitigation and shallow
 as planned in the roadmap. Results before October 2026 used an Aer estimator that never
 sampled measurements; they omitted readout error and reported a floor near -14.
 
+### Gradient comparison (roadmap M1)
+
+Produced by `configs/m1_gradients_ideal.toml` and `configs/m1_gradients_noisy.toml`. Every
+method spends the same 24576 shots per measurement basis per iteration, split over the
+energies its gradient needs, for 40 iterations without gate noise and 20 with it. All gradient
+methods share ADAM with `lr = 0.05`; plain SPSA uses its own update with `lr = 0.01`. The
+metric is the noise-free energy of the final parameters, relative to -18: how good the
+parameters are, separately from the noise floor. The noisy run covers RVB only, because noisy
+simulation costs about 2.5 s per energy and HVA parameter shift needs 72 energies per step.
+
+| ansatz | method | energies per iteration | noise-free error, shot noise only (5 seeds) | noise-free error, FakeGuadalupeV2 noise (1 seed) |
+|---|---|---|---|---|
+| HVA | ADAM, forward differences (the paper) | 3 | 0.252 % ± 0.195 | not run |
+| HVA | ADAM, central differences | 5 | 0.125 % ± 0.127 | not run |
+| HVA | ADAM, SPSA gradient (hybrid) | 2 | 0.113 % ± 0.123 | not run |
+| HVA | ADAM, parameter shift | 72 | 0.126 % ± 0.095 | not run |
+| HVA | plain SPSA | 2 | 0.001 % ± 0.001 | not run |
+| RVB | ADAM, forward differences (the paper) | 13 | 0.149 % ± 0.099 | 0.503 % |
+| RVB | ADAM, central differences | 25 | 0.039 % ± 0.013 | not run |
+| RVB | ADAM, SPSA gradient (hybrid) | 2 | 0.172 % ± 0.160 | 1.428 % |
+| RVB | ADAM, parameter shift | 24 | 0.022 % ± 0.011 | 0.079 % |
+| RVB | plain SPSA | 2 | 1.756 % ± 0.512 | 3.787 % |
+
+- **RVB: use ADAM with parameter shift.** It gives the most precise parameters at the same
+  shot budget, without and with noise. Plain SPSA is the least precise for RVB's 12 parameters.
+- **HVA: use plain SPSA.** With only two parameters it reaches the most precise parameters,
+  while parameter shift costs 72 energies per step. The ADAM variants all plateau at a similar
+  level, which points to ADAM's fixed step size as the limit rather than the gradients.
+- `configs/fake_guadalupe_rvb_adam_ps.toml` and `configs/ibm_hva_spsa.toml` encode these
+  choices. The noise-free errors per shot spent are plotted in
+  `results/m1_ideal-summary/ideal_vs_shots.png`.
+
 ## Roadmap
 
 Noisy runs plateau near -12.7 because of circuit and readout noise, not optimiser failure.
-Milestone M0, an honest noisy simulator, is done. [`docs/roadmap.md`](docs/roadmap.md) records the
+Milestones M0, an honest noisy simulator, and M1, better gradients, are done. [`docs/roadmap.md`](docs/roadmap.md) records the
 diagnosis, the improvement directions (parameter-shift gradients, depth compression, error
 mitigation, subspace methods such as QSE and Krylov diagonalisation) and the milestone plan.
 
