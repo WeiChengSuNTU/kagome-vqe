@@ -258,6 +258,12 @@ def write_benchmark_summary(runs: list[LoadedRun], out_dir: Path) -> tuple[Path,
     return json_path, md_path
 
 
+def _sample_std(values: np.ndarray) -> float:
+    """Sample standard deviation (``ddof=1``) ignoring NaN; 0 for a single value."""
+    finite = values[np.isfinite(values)]
+    return float(np.std(finite, ddof=1)) if finite.size > 1 else 0.0
+
+
 def _aggregate_table(runs: list[LoadedRun]) -> str:
     """Per-combo statistics over seeds, when any combo was repeated; empty string otherwise."""
     groups: dict[str, list[LoadedRun]] = {}
@@ -267,7 +273,7 @@ def _aggregate_table(runs: list[LoadedRun]) -> str:
         return ""
     lines = [
         "",
-        "Aggregated over seeds (mean and standard deviation). The noise-free column is the",
+        "Aggregated over seeds (mean and sample standard deviation). The noise-free column is the",
         "statevector energy of the final parameters: parameter quality, independent of noise.",
         "",
         "| combo | seeds | final E (re-measured) | noise-free E of final params "
@@ -287,8 +293,8 @@ def _aggregate_table(runs: list[LoadedRun]) -> str:
         nfev = np.mean([r["nfev"] for r in rows])
         shots = np.mean([r["total_shots"] for r in rows])
         lines.append(
-            f"| {combo} | {len(rows)} | {final.mean():.4f} +- {final.std():.4f} | "
-            f"{np.nanmean(ideal):.4f} +- {np.nanstd(ideal):.4f} | "
+            f"| {combo} | {len(rows)} | {final.mean():.4f} +- {_sample_std(final):.4f} | "
+            f"{np.nanmean(ideal):.4f} +- {_sample_std(ideal):.4f} | "
             f"{100 * np.nanmean(ideal_err):.3f} % | {nfev:.0f} | {shots:,.0f} |"
         )
     return "\n".join(lines) + "\n"

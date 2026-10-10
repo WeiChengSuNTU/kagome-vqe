@@ -21,11 +21,13 @@ def _heisenberg_bond(circuit: QuantumCircuit, theta: ParameterExpression, a: int
 class HVAnsatz(RingAnsatz):
     """Trotterised Heisenberg evolution on the odd and even ring bonds.
 
-    One layer is ``exp(-i gamma H_even) exp(-i phi H_odd)`` where ``H_odd`` / ``H_even`` are
-    the Heisenberg terms on the odd / even ring bonds. Two parameters per layer, shared across
-    all bonds of a sub-layer, following Wiersema et al. (PRX Quantum 1, 020319). Because the
-    initial singlets already minimise ``H_even``, the state at all-zero parameters is a dimer
-    covering, and for the kagome cell with the default site order it is the exact ground state.
+    One layer is ``exp(-i gamma/2 H_even) exp(-i phi/2 H_odd)`` where ``H_odd`` / ``H_even``
+    are the Heisenberg terms ``XX + YY + ZZ`` on the odd / even ring bonds; the factor 1/2
+    comes from Qiskit's rotation convention ``RZZ(theta) = exp(-i theta/2 ZZ)``. Two parameters
+    per layer, shared across all bonds of a sub-layer, following Wiersema et al. (PRX Quantum 1,
+    020319). Because the initial singlets already minimise ``H_even``, the state at all-zero
+    parameters is a dimer covering, and for the kagome cell with the default site order it is
+    the exact ground state.
 
     Args:
         num_qubits: Ring length (even).

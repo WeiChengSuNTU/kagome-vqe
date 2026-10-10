@@ -278,7 +278,7 @@ checkpoints are marked; the rest runs on simulators.
 
 | check | result |
 |---|---|
-| standard error falls as 1/√shots | real spread over 40 repeats: 0.144 at 1024 shots, 0.060 at 4096; unit-tested |
+| standard error falls as 1/√shots | real spread over 40 repeats of HVA at the exact parameters with FakeGuadalupeV2 noise: 0.144 at 1024 shots, 0.060 at 4096; unit-tested. Without noise the spread at the exact parameters is exactly zero, because each triangle's unmatched bonds cancel shot by shot |
 | identical rows differ between calls | yes, while the same run seed reproduces the sequence; unit-tested |
 | readout error alone moves the energy | -18.00 to -16.43 at the exact parameters; unit-tested |
 | RVB + ADAM no longer climbs | final -12.72, at the floor; previously drifted to -10.8 |
@@ -377,6 +377,15 @@ Original plan:
 - **Exit:** at least one instance where noiseless VQE has a visible gap, used by M4 and M5.
 
 ### M4. Depth compression
+
+**Early finding, October 2026** (from the documentation worktree's report, verified on
+`main`). Transpiling with the parameters left free keeps each Heisenberg bond block at 5 CX,
+because two-qubit resynthesis only works on numeric matrices. Binding the angles first lets the
+transpiler use the 3-CX form: HVA drops from 66 to 42 CX, and at a generic point
+(`phi = gamma = 0.3`) the noisy energy keeps 78 % of the ideal value instead of 71 %. Two ways to
+use it: build the bond block from a parametric 3-CX template, or transpile per evaluation with
+bound parameters. This is a nearly free first step for M4.
+
 
 - **Deliverables:**
   - **Step 1:** transpiler-level experiments: `approximation_degree`, PyZX, BQSKit, Rustiq for HVA built from Pauli evolutions.

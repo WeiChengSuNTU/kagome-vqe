@@ -167,8 +167,10 @@ run therefore mostly tests whether the optimiser walks back from the random star
 `x0 = pi/4 * rand`; HVA does so easily (2 parameters), RVB's SPSA run lands at 0.9 %.
 
 The physically meaningful benchmark is the noisy one. On `aer_noisy:FakeGuadalupeV2` the
-transpiled circuits have 66 (HVA) to 93 (RVB) CX gates and the energy at the exact optimum is
-already far above -18. The questions worth asking there are: how much does resilience level
+transpiled circuits have 66 CX gates for both HVA and RVB (54 for RVB with the legacy eSWAP;
+the 2022 notebook's 93 came from its different layout), and the energy at the exact optimum is
+already far above -18. Transpiling with the parameters left free keeps each Heisenberg bond
+block at 5 CX; binding the angles first lets the transpiler resynthesise it with 3, giving 42. The questions worth asking there are: how much does resilience level
 1 or 2 recover, which ansatz survives the depth, and how large a perturbation SPSA needs to
 see through shot noise. Those are exactly the knobs `BackendConfig` exposes.
 

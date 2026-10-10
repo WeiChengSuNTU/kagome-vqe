@@ -173,18 +173,18 @@ metric is the noise-free energy of the final parameters, relative to -18: how go
 parameters are, separately from the noise floor. The noisy run covers RVB only, because noisy
 simulation costs about 2.5 s per energy and HVA parameter shift needs 72 energies per step.
 
-| ansatz | method | energies per iteration | noise-free error, shot noise only (5 seeds) | noise-free error, FakeGuadalupeV2 noise (1 seed) |
+| ansatz | method | energies per iteration | noise-free error, shot noise only (mean ± sample std, 5 seeds) | noise-free error, FakeGuadalupeV2 noise (1 seed) |
 |---|---|---|---|---|
-| HVA | ADAM, forward differences (the paper) | 3 | 0.252 % ± 0.195 | not run |
-| HVA | ADAM, central differences | 5 | 0.125 % ± 0.127 | not run |
-| HVA | ADAM, SPSA gradient (hybrid) | 2 | 0.113 % ± 0.123 | not run |
-| HVA | ADAM, parameter shift | 72 | 0.126 % ± 0.095 | not run |
+| HVA | ADAM, forward differences (the paper) | 3 | 0.252 % ± 0.218 | not run |
+| HVA | ADAM, central differences | 5 | 0.125 % ± 0.142 | not run |
+| HVA | ADAM, SPSA gradient (hybrid) | 2 | 0.113 % ± 0.137 | not run |
+| HVA | ADAM, parameter shift | 72 | 0.126 % ± 0.107 | not run |
 | HVA | plain SPSA | 2 | 0.001 % ± 0.001 | not run |
-| RVB | ADAM, forward differences (the paper) | 13 | 0.149 % ± 0.099 | 0.503 % |
-| RVB | ADAM, central differences | 25 | 0.039 % ± 0.013 | not run |
-| RVB | ADAM, SPSA gradient (hybrid) | 2 | 0.172 % ± 0.160 | 1.428 % |
-| RVB | ADAM, parameter shift | 24 | 0.022 % ± 0.011 | 0.079 % |
-| RVB | plain SPSA | 2 | 1.756 % ± 0.512 | 3.787 % |
+| RVB | ADAM, forward differences (the paper) | 13 | 0.149 % ± 0.111 | 0.503 % |
+| RVB | ADAM, central differences | 25 | 0.039 % ± 0.015 | not run |
+| RVB | ADAM, SPSA gradient (hybrid) | 2 | 0.172 % ± 0.179 | 1.428 % |
+| RVB | ADAM, parameter shift | 24 | 0.022 % ± 0.012 | 0.079 % |
+| RVB | plain SPSA | 2 | 1.756 % ± 0.573 | 3.787 % |
 
 - **RVB: use ADAM with parameter shift.** It gives the most precise parameters at the same
   shot budget, without and with noise. Plain SPSA is the least precise for RVB's 12 parameters.
