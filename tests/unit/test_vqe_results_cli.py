@@ -39,7 +39,7 @@ def test_prepare_reports_projection(small_cfg: RunConfig) -> None:
     assert prepared.exact_energy == pytest.approx(-18.0)
     assert prepared.projected_evaluations == 2 * 3 + 1
     summary = prepared.summary()
-    assert summary["ansatz"] == {"name": "hva", "num_parameters": 2}
+    assert summary["ansatz"] == {"name": "hva", "num_parameters": 2, "circuit_parameters": 2}
     assert summary["lattice"]["ring_bond_fraction"] == 1.0
 
 

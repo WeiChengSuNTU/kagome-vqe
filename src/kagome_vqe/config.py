@@ -24,8 +24,16 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from kagome_vqe.ansatz import Ansatz, HVAnsatz, LibraryAnsatz, RVBAnsatz
 from kagome_vqe.ansatz.base import ring_bonds
+from kagome_vqe.ansatz.unshare import ParameterMap
 from kagome_vqe.lattice import KAGOME_HAMILTONIAN_CYCLE, Lattice, kagome_unit_cell
-from kagome_vqe.optimizers import Adam, Optimizer, ScipyOptimizer, Spsa
+from kagome_vqe.optimizers import (
+    Adam,
+    GradientDescent,
+    Optimizer,
+    ScipyOptimizer,
+    Spsa,
+    make_gradient,
+)
 
 __all__ = [
     "AnsatzConfig",
@@ -134,35 +142,67 @@ class OptimizerConfig(_Frozen):
     """Classical optimiser settings.
 
     Attributes:
-        type: ``"adam"``, ``"spsa"`` or ``"scipy"``.
+        type: ``"adam"``, ``"gd"`` (plain gradient descent), ``"spsa"`` or ``"scipy"``.
         maxiter: Iteration budget.
-        lr: ADAM learning rate / SPSA step size.
-        perturbation: SPSA perturbation magnitude.
-        fd_eps: ADAM finite-difference step (use ~0.1 under shot noise).
-        gradient: ADAM difference scheme.
+        lr: ADAM / gradient-descent learning rate, SPSA step size.
+        perturbation: SPSA perturbation magnitude, also used by ``gradient = "spsa"``.
+        fd_eps: Finite-difference step (use ~0.1 under shot noise).
+        gradient: Gradient estimator for ``adam`` and ``gd``: ``"forward"`` or ``"central"``
+            differences, ``"spsa"`` (two-point simultaneous perturbation; with ``adam`` this is
+            the SPSA-ADAM hybrid) or ``"parameter_shift"`` (exact up to shot noise; the circuit
+            is compiled with one parameter per gate). Ignored by ``spsa`` and ``scipy``.
         calibrate: SPSA: derive decaying gains automatically instead of fixed ``lr``.
         method: scipy method name.
         tol: Convergence tolerance (ADAM update norm / scipy ``tol``).
     """
 
-    type: Literal["adam", "spsa", "scipy"] = "adam"
+    type: Literal["adam", "gd", "spsa", "scipy"] = "adam"
     maxiter: Annotated[int, Field(ge=1)] = 100
     lr: Annotated[float, Field(gt=0)] = 0.01
     perturbation: Annotated[float, Field(gt=0)] = 0.01
     fd_eps: Annotated[float, Field(gt=0)] = 1e-6
-    gradient: Literal["forward", "central"] = "forward"
+    gradient: Literal["forward", "central", "spsa", "parameter_shift"] = "forward"
     calibrate: bool = False
     method: str = "COBYLA"
     tol: float | None = None
 
-    def build(self, rng: np.random.Generator) -> Optimizer:
-        """Construct the optimiser; ``rng`` seeds SPSA's random directions."""
-        if self.type == "adam":
+    @property
+    def uses_parameter_shift(self) -> bool:
+        """Whether the circuit must be compiled with one parameter per gate occurrence."""
+        return self.type in ("adam", "gd") and self.gradient == "parameter_shift"
+
+    def label(self) -> str:
+        """Short name for file names: ``adam``, ``adam_parameter_shift``, ``spsa``, ..."""
+        if self.type in ("adam", "gd") and (self.type == "gd" or self.gradient != "forward"):
+            return f"{self.type}_{self.gradient}"
+        if self.type == "scipy":
+            return f"scipy_{self.method.lower()}"
+        return self.type
+
+    def build(
+        self, rng: np.random.Generator, parameter_map: ParameterMap | None = None
+    ) -> Optimizer:
+        """Construct the optimiser.
+
+        Args:
+            rng: Seeds SPSA's random directions (also for ``gradient = "spsa"``).
+            parameter_map: Occurrence map of the compiled circuit, required for
+                ``gradient = "parameter_shift"`` when parameters are shared.
+        """
+        if self.type in ("adam", "gd"):
+            gradient = make_gradient(
+                self.gradient,
+                fd_eps=self.fd_eps,
+                perturbation=self.perturbation,
+                rng=rng,
+                parameter_map=parameter_map,
+            )
+            if self.type == "gd":
+                return GradientDescent(maxiter=self.maxiter, lr=self.lr, gradient=gradient)
             return Adam(
                 maxiter=self.maxiter,
                 lr=self.lr,
-                fd_eps=self.fd_eps,
-                gradient=self.gradient,
+                gradient=gradient,
                 tol=1e-6 if self.tol is None else self.tol,
             )
         if self.type == "spsa":
@@ -265,6 +305,10 @@ class RunConfig(_Frozen):
         backend: See :class:`BackendConfig`.
         output_dir: Root under which the results directory is created.
         record_params: Store the parameter vector of every evaluation (``params.npy``).
+        track_ideal_energy: After every iteration, compute the noise-free (statevector) energy
+            of the current parameters and store it with the cumulative shot count. This
+            measures parameter quality independently of noise, which is the fair way to
+            compare optimisers on noisy backends. Classical cost; skipped above 20 qubits.
     """
 
     name: str = "run"
@@ -276,6 +320,7 @@ class RunConfig(_Frozen):
     backend: BackendConfig = BackendConfig()
     output_dir: Path = Path("results")
     record_params: bool = True
+    track_ideal_energy: bool = True
 
     @field_validator("name")
     @classmethod
@@ -292,15 +337,25 @@ class RunConfig(_Frozen):
 
 
 class ComboConfig(_Frozen):
-    """One (ansatz, optimiser) pair of a benchmark."""
+    """One (ansatz, optimiser) pair of a benchmark.
+
+    Attributes:
+        ansatz: Trial circuit.
+        optimizer: Optimiser and gradient settings.
+        label: Name used in result directories; defaults to ``"<ansatz>_<optimizer label>"``.
+        shots: Overrides ``backend.shots`` for this combo. Used to give every method the same
+            shot budget per iteration, e.g. fewer shots per energy for parameter shift, which
+            needs more energies per gradient.
+    """
 
     ansatz: AnsatzConfig
     optimizer: OptimizerConfig
     label: str | None = None
+    shots: Annotated[int, Field(ge=1)] | None = None
 
     def name(self) -> str:
-        """``label`` or ``"<ansatz>_<optimizer>"``."""
-        return self.label or f"{self.ansatz.type}_{self.optimizer.type}"
+        """``label`` or ``"<ansatz>_<optimizer label>"``."""
+        return self.label or f"{self.ansatz.type}_{self.optimizer.label()}"
 
 
 def _paper_combos() -> list[ComboConfig]:
@@ -315,33 +370,53 @@ def _paper_combos() -> list[ComboConfig]:
 
 
 class BenchmarkConfig(_Frozen):
-    """A set of runs sharing lattice, backend and seed; defaults to the paper's four combos."""
+    """A set of runs sharing lattice and backend; defaults to the paper's four combos.
+
+    Attributes:
+        seeds: Repeat every combo once per seed. ``None`` runs each combo once with ``seed``.
+            Gradient methods are stochastic, so comparisons should use several seeds; the
+            summary then aggregates per combo.
+        Other fields mirror :class:`RunConfig` and apply to every run.
+    """
 
     name: str = "benchmark"
     seed: int = 42
+    seeds: list[int] | None = None
     x0_scale: Annotated[float, Field(ge=0)] = math.pi / 4
     lattice: LatticeConfig = LatticeConfig()
     backend: BackendConfig = BackendConfig()
     output_dir: Path = Path("results")
     record_params: bool = False
+    track_ideal_energy: bool = True
     combos: list[ComboConfig] = Field(default_factory=_paper_combos)
 
     def run_configs(self) -> list[RunConfig]:
-        """Expand into one :class:`RunConfig` per combo."""
-        return [
-            RunConfig(
-                name=f"{self.name}-{combo.name()}",
-                seed=self.seed,
-                x0_scale=self.x0_scale,
-                lattice=self.lattice,
-                ansatz=combo.ansatz,
-                optimizer=combo.optimizer,
-                backend=self.backend,
-                output_dir=self.output_dir,
-                record_params=self.record_params,
+        """Expand into one :class:`RunConfig` per combo and seed."""
+        seeds = self.seeds or [self.seed]
+        runs: list[RunConfig] = []
+        for combo in self.combos:
+            backend = (
+                self.backend
+                if combo.shots is None
+                else self.backend.model_copy(update={"shots": combo.shots})
             )
-            for combo in self.combos
-        ]
+            for seed in seeds:
+                suffix = "" if self.seeds is None else f"-s{seed}"
+                runs.append(
+                    RunConfig(
+                        name=f"{self.name}-{combo.name()}{suffix}",
+                        seed=seed,
+                        x0_scale=self.x0_scale,
+                        lattice=self.lattice,
+                        ansatz=combo.ansatz,
+                        optimizer=combo.optimizer,
+                        backend=backend,
+                        output_dir=self.output_dir,
+                        record_params=self.record_params,
+                        track_ideal_energy=self.track_ideal_energy,
+                    )
+                )
+        return runs
 
 
 class Settings(BaseSettings):

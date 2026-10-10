@@ -209,7 +209,7 @@ def benchmark(
     verbose: Verbose = False,
 ) -> None:
     """Run every (ansatz, optimiser) combo of CONFIG on one backend and tabulate."""
-    from kagome_vqe.plotting import plot_runs
+    from kagome_vqe.plotting import plot_ideal_vs_shots, plot_runs
     from kagome_vqe.results import load_run, write_benchmark_summary
 
     configure_logging(logging.DEBUG if verbose else logging.INFO)
@@ -229,8 +229,14 @@ def benchmark(
     plot_runs(
         runs, axis="iteration", out=fig_path, title=f"{bench.name} on {bench.backend.label()}"
     )
+    ideal_path = out_dir / "ideal_vs_shots.png"
+    has_ideal = plot_ideal_vs_shots(
+        runs, out=ideal_path, title=f"{bench.name}: parameter quality vs cost"
+    )
     console.print(md_path.read_text())
     console.print(f"summary: {json_path}\nfigure:  {fig_path}")
+    if has_ideal is not None:
+        console.print(f"figure:  {ideal_path}")
 
 
 # -- plot -------------------------------------------------------------------------------------

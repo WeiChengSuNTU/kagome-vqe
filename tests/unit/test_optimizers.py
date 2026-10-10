@@ -114,6 +114,6 @@ def test_invalid_settings() -> None:
     with pytest.raises(ValueError, match="maxiter"):
         Adam(maxiter=0)
     with pytest.raises(ValueError, match="gradient"):
-        Adam(gradient="sideways")  # type: ignore[arg-type]
+        Adam(gradient="sideways")
     with pytest.raises(ValueError, match="perturbation"):
         Spsa(perturbation=0)

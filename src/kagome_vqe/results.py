@@ -6,6 +6,7 @@ A results directory ``results/<UTC timestamp>-<name>/`` contains::
     result.json        final energies, errors, parameters, ISA stats, timings
     trace.csv          one row per energy evaluation
     params.npy         parameters of every evaluation (optional, shape (nfev, n))
+    ideal_trace.csv    noise-free energy after every iteration vs shots spent (optional)
     environment.json   package versions, Python, platform, git commit
     run.log            the log of the run (attached by the CLI)
 
@@ -17,6 +18,7 @@ from __future__ import annotations
 import json
 import logging
 import platform
+import re
 import subprocess
 import sys
 from collections.abc import Hashable
@@ -110,6 +112,8 @@ def _result_dict(result: VQERunResult) -> dict[str, Any]:
         "best_energy": result.best_energy,
         "best_relative_error": result.best_relative_error,
         "total_shots": result.total_shots,
+        "ideal_energy": result.ideal_energy,
+        "ideal_relative_error": result.ideal_relative_error,
         "nfev": result.nfev,
         "nit": result.nit,
         "wall_time_s": result.wall_time_s,
@@ -134,6 +138,10 @@ def save_run(result: VQERunResult, run_dir: Path) -> Path:
     pd.DataFrame([asdict(r) for r in result.trace]).to_csv(run_dir / "trace.csv", index=False)
     if result.params_history:
         np.save(run_dir / "params.npy", np.vstack(result.params_history))
+    if result.ideal_trace:
+        pd.DataFrame([asdict(p) for p in result.ideal_trace]).to_csv(
+            run_dir / "ideal_trace.csv", index=False
+        )
     (run_dir / "environment.json").write_text(json.dumps(environment_info(), indent=2) + "\n")
     log.info("saved run to %s", run_dir)
     return run_dir
@@ -148,11 +156,17 @@ class LoadedRun:
     result: dict[str, Any]
     trace: pd.DataFrame
     params: np.ndarray | None
+    ideal_trace: pd.DataFrame | None = None
 
     @property
     def name(self) -> str:
         """Run name."""
         return str(self.result["name"])
+
+    @property
+    def combo(self) -> str:
+        """Run name without a trailing ``-s<seed>``: the label shared by repeated seeds."""
+        return re.sub(r"-s\d+$", "", self.name)
 
     def energies(self) -> np.ndarray:
         """Energy per evaluation."""
@@ -188,7 +202,11 @@ def load_run(run_dir: Path) -> LoadedRun:
     trace = pd.read_csv(run_dir / "trace.csv")
     params_path = run_dir / "params.npy"
     params = np.load(params_path) if params_path.exists() else None
-    return LoadedRun(path=run_dir, config=config, result=result, trace=trace, params=params)
+    ideal_path = run_dir / "ideal_trace.csv"
+    ideal = pd.read_csv(ideal_path) if ideal_path.exists() else None
+    return LoadedRun(
+        path=run_dir, config=config, result=result, trace=trace, params=params, ideal_trace=ideal
+    )
 
 
 def _summary_row(run: LoadedRun) -> dict[str, Any]:
@@ -209,6 +227,8 @@ def _summary_row(run: LoadedRun) -> dict[str, Any]:
         "two_qubit_gates": res.get("isa", {}).get("two_qubit_gates"),
         "nfev": res["nfev"],
         "total_shots": res.get("total_shots", 0),
+        "ideal_energy": res.get("ideal_energy"),
+        "ideal_relative_error": res.get("ideal_relative_error"),
         "wall_time_s": res["wall_time_s"],
         "path": str(run.path),
     }
@@ -234,5 +254,41 @@ def write_benchmark_summary(runs: list[LoadedRun], out_dir: Path) -> tuple[Path,
         for r in rows
     )
     md_path = out_dir / "benchmark.md"
-    md_path.write_text(header + body)
+    md_path.write_text(header + body + _aggregate_table(runs))
     return json_path, md_path
+
+
+def _aggregate_table(runs: list[LoadedRun]) -> str:
+    """Per-combo statistics over seeds, when any combo was repeated; empty string otherwise."""
+    groups: dict[str, list[LoadedRun]] = {}
+    for run in runs:
+        groups.setdefault(run.combo, []).append(run)
+    if all(len(g) == 1 for g in groups.values()):
+        return ""
+    lines = [
+        "",
+        "Aggregated over seeds (mean and standard deviation). The noise-free column is the",
+        "statevector energy of the final parameters: parameter quality, independent of noise.",
+        "",
+        "| combo | seeds | final E (re-measured) | noise-free E of final params "
+        "| noise-free rel. err | evaluations | total shots |",
+        "|---|---|---|---|---|---|---|",
+    ]
+    for combo, group in groups.items():
+        rows = [_summary_row(r) for r in group]
+        final = np.array([r["final_energy"] for r in rows], dtype=float)
+        ideal = np.array([np.nan if r["ideal_energy"] is None else r["ideal_energy"] for r in rows])
+        ideal_err = np.array(
+            [
+                np.nan if r["ideal_relative_error"] is None else r["ideal_relative_error"]
+                for r in rows
+            ]
+        )
+        nfev = np.mean([r["nfev"] for r in rows])
+        shots = np.mean([r["total_shots"] for r in rows])
+        lines.append(
+            f"| {combo} | {len(rows)} | {final.mean():.4f} +- {final.std():.4f} | "
+            f"{np.nanmean(ideal):.4f} +- {np.nanstd(ideal):.4f} | "
+            f"{100 * np.nanmean(ideal_err):.3f} % | {nfev:.0f} | {shots:,.0f} |"
+        )
+    return "\n".join(lines) + "\n"

@@ -20,15 +20,28 @@ from numpy.typing import NDArray
 from qiskit.quantum_info import SparsePauliOp
 
 from kagome_vqe.ansatz import Ansatz
+from kagome_vqe.ansatz.unshare import ParameterMap, unshare_parameters
 from kagome_vqe.backends import resolve_backend
 from kagome_vqe.config import RunConfig, Settings
-from kagome_vqe.estimators import EnergyEstimator, make_estimator
+from kagome_vqe.estimators import EnergyEstimator, StatevectorEnergy, make_estimator
 from kagome_vqe.hamiltonian import exact_spectrum, heisenberg_hamiltonian, relative_error
 from kagome_vqe.lattice import Lattice
 from kagome_vqe.optimizers import IterationInfo, Optimizer
 from kagome_vqe.transpile import IsaProblem, compile_for_backend
 
-__all__ = ["EnergyObjective", "Prepared", "TraceRow", "VQERunResult", "prepare", "run_vqe"]
+__all__ = [
+    "IDEAL_TRACKING_MAX_QUBITS",
+    "EnergyObjective",
+    "IdealPoint",
+    "Prepared",
+    "TraceRow",
+    "VQERunResult",
+    "prepare",
+    "run_vqe",
+]
+
+IDEAL_TRACKING_MAX_QUBITS = 20
+"""Above this many qubits the per-iteration statevector check is skipped (memory and time)."""
 
 log = logging.getLogger(__name__)
 
@@ -60,17 +73,31 @@ class TraceRow:
 
 
 class EnergyObjective:
-    """An :class:`~kagome_vqe.optimizers.Objective` that records every evaluation.
+    """An :class:`~kagome_vqe.optimizers.ExpandableObjective` that records every evaluation.
 
-    Optimisers call :meth:`batch` once per iteration; the objective forwards the batch to the
-    estimator and appends one :class:`TraceRow` per parameter vector, tagged with the current
-    iteration (which :meth:`on_iteration` advances).
+    Optimisers call :meth:`batch` with ansatz parameters ``theta``; parameter-shift gradients
+    call :meth:`batch_expanded` with circuit parameters ``phi`` (one per gate occurrence). Both
+    forward one batch to the estimator and append one :class:`TraceRow` per row, tagged with
+    the current iteration (which :meth:`on_iteration` advances).
+
+    Args:
+        estimator: Evaluates circuit-parameter rows.
+        record_params: Keep the ansatz parameters of every evaluation. For parameter-shift rows
+            the point the gradient was taken at is recorded.
+        parameter_map: Map from ansatz to circuit parameters; identity if omitted.
     """
 
-    def __init__(self, estimator: EnergyEstimator, *, record_params: bool = True) -> None:
+    def __init__(
+        self,
+        estimator: EnergyEstimator,
+        *,
+        record_params: bool = True,
+        parameter_map: ParameterMap | None = None,
+    ) -> None:
         """Wrap ``estimator``."""
         self._estimator = estimator
         self._record_params = record_params
+        self._map = parameter_map
         self.trace: list[TraceRow] = []
         self.params: list[FloatArray] = []
         self._iteration = 1
@@ -86,6 +113,19 @@ class EnergyObjective:
         return len(self.trace)
 
     @property
+    def parameter_map(self) -> ParameterMap:
+        """Map from ansatz parameters to the estimator's circuit parameters."""
+        if self._map is None:
+            msg = "parameter map unknown until the first batch; pass parameter_map explicitly"
+            raise RuntimeError(msg)
+        return self._map
+
+    @property
+    def shots_spent(self) -> int:
+        """Shots per measurement basis summed over all evaluations so far."""
+        return sum(row.shots or 0 for row in self.trace)
+
+    @property
     def best(self) -> TraceRow | None:
         """Lowest energy seen so far."""
         return min(self.trace, key=lambda r: r.energy, default=None)
@@ -95,11 +135,22 @@ class EnergyObjective:
         self._iteration = info.nit + 1
 
     def batch(self, xs: FloatArray) -> FloatArray:
-        """Evaluate a ``(k, n)`` batch and record it."""
+        """Evaluate a ``(k, n)`` batch of ansatz parameters and record it."""
         xs = np.atleast_2d(np.asarray(xs, dtype=float))
-        result = self._estimator.evaluate(xs)
-        per_eval = result.wall_time_s / max(1, xs.shape[0])
-        for x, energy, std in zip(xs, result.energies, result.stds, strict=True):
+        if self._map is None:
+            self._map = ParameterMap.identity(xs.shape[1])
+        return self._evaluate(self._map.expand(xs), xs)
+
+    def batch_expanded(self, phis: FloatArray, *, base: FloatArray | None = None) -> FloatArray:
+        """Evaluate a ``(k, K)`` batch of circuit parameters and record it."""
+        phis = np.atleast_2d(np.asarray(phis, dtype=float))
+        thetas = phis if base is None else np.repeat(np.asarray(base, float)[None, :], len(phis), 0)
+        return self._evaluate(phis, thetas)
+
+    def _evaluate(self, phis: FloatArray, thetas: FloatArray) -> FloatArray:
+        result = self._estimator.evaluate(phis)
+        per_eval = result.wall_time_s / max(1, phis.shape[0])
+        for x, energy, std in zip(thetas, result.energies, result.stds, strict=True):
             row = TraceRow(
                 eval_idx=len(self.trace),
                 iteration=self._iteration,
@@ -134,6 +185,8 @@ class Prepared:
         backend: Backend object (``None`` for statevector).
         exact_spectrum: Lowest three exact eigenvalues (reference).
         projected_evaluations: Objective evaluations the optimiser will use, if predictable.
+        parameter_map: Map from ansatz parameters to the compiled circuit's parameters. The
+            identity unless parameter shift required one parameter per gate occurrence.
     """
 
     config: RunConfig
@@ -144,6 +197,7 @@ class Prepared:
     backend: Any | None
     exact_spectrum: FloatArray
     projected_evaluations: int | None
+    parameter_map: ParameterMap = field(default_factory=lambda: ParameterMap.identity(0))
 
     @property
     def exact_energy(self) -> float:
@@ -163,12 +217,33 @@ class Prepared:
             },
             "hamiltonian_terms": len(self.hamiltonian),
             "exact_spectrum": [float(v) for v in self.exact_spectrum],
-            "ansatz": {"name": self.ansatz.name, "num_parameters": self.ansatz.num_parameters},
+            "ansatz": {
+                "name": self.ansatz.name,
+                "num_parameters": self.ansatz.num_parameters,
+                "circuit_parameters": self.parameter_map.num_occurrences,
+            },
             "optimizer": self.config.optimizer.model_dump(),
             "backend": self.config.backend.label(),
             "isa": self.problem.stats(),
             "projected_evaluations": self.projected_evaluations,
         }
+
+
+@dataclass(frozen=True, slots=True)
+class IdealPoint:
+    """Noise-free energy of the optimiser's parameters after an iteration.
+
+    Attributes:
+        iteration: Optimiser iteration (0 = initial point).
+        nfev: Energy evaluations spent so far.
+        shots: Circuit shots spent so far, over all measurement bases.
+        ideal_energy: Statevector energy of the parameters, independent of noise and shots.
+    """
+
+    iteration: int
+    nfev: int
+    shots: int
+    ideal_energy: float
 
 
 @dataclass(slots=True)
@@ -199,6 +274,9 @@ class VQERunResult:
         final_shots: Shots per measurement basis used for ``final_energy``; ``None`` if exact.
         total_shots: Circuit executions spent, including the re-measurement:
             ``sum(shots per evaluation) * measurement_groups``; 0 when exact.
+        ideal_energy: Noise-free energy of the final parameters, if tracked. On noisy backends
+            this measures how good the parameters are, separately from the noise floor.
+        ideal_trace: Noise-free energy after every iteration, with shots spent, if tracked.
     """
 
     config: RunConfig
@@ -219,6 +297,17 @@ class VQERunResult:
     final_std: float = 0.0
     final_shots: int | None = None
     total_shots: int = 0
+    ideal_energy: float | None = None
+    ideal_trace: list[IdealPoint] = field(default_factory=list)
+
+    @property
+    def ideal_relative_error(self) -> float | None:
+        """Relative error of the noise-free energy of the final parameters, if tracked."""
+        return (
+            None
+            if self.ideal_energy is None
+            else relative_error(self.exact_energy, self.ideal_energy)
+        )
 
     @property
     def final_relative_error(self) -> float:
@@ -253,6 +342,10 @@ def prepare(cfg: RunConfig, *, settings: Settings | None = None) -> Prepared:
     hamiltonian = heisenberg_hamiltonian(lattice)
     ansatz = cfg.ansatz.build(lattice)
     circuit = ansatz.build()
+    if cfg.optimizer.uses_parameter_shift:
+        circuit, parameter_map = unshare_parameters(circuit)
+    else:
+        parameter_map = ParameterMap.identity(ansatz.num_parameters)
     backend = resolve_backend(cfg.backend, settings)
     problem = compile_for_backend(
         circuit,
@@ -263,7 +356,7 @@ def prepare(cfg: RunConfig, *, settings: Settings | None = None) -> Prepared:
         seed_transpiler=cfg.seed,
     )
     spectrum = exact_spectrum(hamiltonian, k=3)
-    optimizer = cfg.optimizer.build(np.random.default_rng(cfg.seed))
+    optimizer = cfg.optimizer.build(np.random.default_rng(cfg.seed), parameter_map)
     per_iter = optimizer.evaluations_per_iteration(ansatz.num_parameters)
     projected = None if per_iter is None else per_iter * optimizer.maxiter + 1
     log.info(
@@ -283,7 +376,21 @@ def prepare(cfg: RunConfig, *, settings: Settings | None = None) -> Prepared:
         backend=backend,
         exact_spectrum=spectrum,
         projected_evaluations=projected,
+        parameter_map=parameter_map,
     )
+
+
+def _ideal_energy_fn(prep: Prepared) -> Callable[[FloatArray], float] | None:
+    """Noise-free energy of ansatz parameters, or ``None`` if tracking is off or too large."""
+    if not prep.config.track_ideal_energy or prep.lattice.num_sites > IDEAL_TRACKING_MAX_QUBITS:
+        return None
+    logical = compile_for_backend(prep.ansatz.build(), prep.hamiltonian, None)
+    estimator = StatevectorEnergy(logical)
+
+    def ideal(theta: FloatArray) -> float:
+        return float(estimator.evaluate(np.asarray(theta, dtype=float)[None, :]).energies[0])
+
+    return ideal
 
 
 def run_vqe(
@@ -307,11 +414,28 @@ def run_vqe(
     prep = prepared or prepare(cfg, settings=settings)
     rng = np.random.default_rng(cfg.seed)
     x0 = cfg.x0_scale * rng.random(prep.ansatz.num_parameters)
-    optimizer: Optimizer = cfg.optimizer.build(rng)
+    optimizer: Optimizer = cfg.optimizer.build(rng, prep.parameter_map)
+    groups = 0 if cfg.backend.is_exact else prep.problem.measurement_groups
+    ideal = _ideal_energy_fn(prep)
+    ideal_trace: list[IdealPoint] = []
 
     start = time.perf_counter()
     with make_estimator(cfg.backend, prep.problem, prep.backend, seed=cfg.seed) as estimator:
-        objective = EnergyObjective(estimator, record_params=cfg.record_params)
+        objective = EnergyObjective(
+            estimator, record_params=cfg.record_params, parameter_map=prep.parameter_map
+        )
+
+        def on_iteration(info: IterationInfo) -> None:
+            objective.on_iteration(info)
+            if ideal is not None:
+                ideal_trace.append(
+                    IdealPoint(
+                        info.nit, objective.nfev, groups * objective.shots_spent, ideal(info.x)
+                    )
+                )
+
+        if ideal is not None:
+            ideal_trace.append(IdealPoint(0, 0, 0, ideal(x0)))
         if on_evaluation is not None:
             objective.add_listener(on_evaluation)
         log.info(
@@ -320,14 +444,14 @@ def run_vqe(
             float(np.linalg.norm(x0)),
             "?" if prep.projected_evaluations is None else prep.projected_evaluations,
         )
-        opt = optimizer.minimize(objective, x0, callback=objective.on_iteration)
+        opt = optimizer.minimize(objective, x0, callback=on_iteration)
         final = estimator.evaluate(
-            np.asarray(opt.x, dtype=float)[None, :], shots=cfg.backend.remeasure_shots
+            prep.parameter_map.expand(np.asarray(opt.x, dtype=float))[None, :],
+            shots=cfg.backend.remeasure_shots,
         )
         description = estimator.description
     elapsed = time.perf_counter() - start
 
-    groups = 0 if cfg.backend.is_exact else prep.problem.measurement_groups
     total_shots = groups * (sum(row.shots or 0 for row in objective.trace) + (final.shots or 0))
 
     best = objective.best
@@ -351,6 +475,8 @@ def run_vqe(
         final_std=float(final.stds[0]),
         final_shots=final.shots if not cfg.backend.is_exact else None,
         total_shots=int(total_shots),
+        ideal_energy=None if ideal is None else ideal(opt.x),
+        ideal_trace=ideal_trace,
     )
     log.info(
         "%s finished: E_final=%.6f (exact %.6f, rel. err %.2e), %d evaluations in %.1fs",
