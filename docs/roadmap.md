@@ -351,36 +351,53 @@ Original plan:
   shift, SPSA and the hybrid on RVB and HVA. Plot best-so-far energy against shots spent.
 - **Exit:** a recommended default gradient per ansatz, recorded in the configs.
 
-### M2. Error-mitigation baseline (done)
+### M2. Error-mitigation baseline (done, revised)
 
-**Status, October 2026.** Code in commit `c9272e3`; results in `results/m2-evaluation-0`,
-`results/m2-evaluation-0p3` and `results/m2_vqe-summary`; full tables in the README under
-"Error mitigation".
+**Status, October 2026.** Code in `c9272e3` (techniques) and `56aadd3` (correct-then-filter,
+noise-source switch). Results in `results/m2b-evaluation-0`, `results/m2b-evaluation-0p3`,
+`results/m2b_readout-evaluation-0p3`, `results/m2b_gates-evaluation-0p3` and
+`results/m2b_vqe-summary`. Full tables are in the README under "Error mitigation".
 
 | check | result |
 |---|---|
 | each technique implemented as a composable estimator layer | readout correction and symmetry filtering (counts level), ZNE, twin rescaling; unit-tested |
-| energy at fixed points, per stack | 10 stacks x 2 ansatzes x 2 points (exact and θ = 0.3), 8 repeats each |
-| gap closed and variance cost | readout + symmetry: bias 0.14 to 0.70 % from 29 %, spread unchanged, no extra shots per energy |
-| mitigation stack chosen for hardware | readout correction + symmetry filtering; readout + ZNE as the fallback for non-singlet ansatzes |
-| full optimisation with the stack | HVA + SPSA -18.08 (0.46 %), RVB + ADAM parameter shift -17.97 (0.19 %) |
+| energy at fixed points, per stack | 10 stacks x 2 ansatzes x 2 points, 8 repeats; plus readout-only and gate-only noise at θ = 0.3 |
+| gap closed and variance cost | readout + symmetry + twin: bias at most 0.43 % in every noise setting, no extra shots per energy, 81,920 one-off shots |
+| mitigation stack chosen for hardware | readout correction, then symmetry filtering, then twin rescaling; readout + ZNE as the fallback for non-singlet ansatzes |
 | H1 hardware check | skipped for now, as with H0 |
+
+**How the first conclusion went wrong.** Commit `c9272e3` first recommended readout plus
+symmetry alone, filtering shots first and then correcting each kept shot. The documentation
+worktree found, and an independent check confirmed, that this was two errors cancelling:
+
+- **The filter already removes nearly every single readout flip.** The per-shot weights then
+  divide each two-body term by about `(1 - 2e_a)(1 - 2e_b)`. With readout noise alone this gave
+  -19.57 instead of -18, a 9 % over-correction.
+- **The filter cannot see gate noise inside the singlet sector,** which leaves a residual of
+  about 5 %.
+- **On FakeGuadalupeV2 the two happened to cancel.** On a device with a different ratio of
+  readout to gate error, or after compression reduces the gate error, the stack would have
+  overshot.
+
+The lesson for every later milestone: check a mitigation method against each error source
+separately (`backend.noise = "readout"` / `"gates"`), not only against the full model.
 
 Findings and open problems:
 
-- **The chosen stack overshoots slightly.** Mitigated energies sit a little below the noise-free
-  value, and below -18 near the optimum: -18.06 at the exact HVA parameters, -18.08 at the end
-  of the HVA optimisation. The readout calibration describes all shots but is applied to the
-  post-selected ones. A sector-aware readout correction is the obvious next step.
-- **Symmetry filtering breaks ZNE.** Post-selection removes noise non-multiplicatively, so
-  exponential extrapolation over-corrects to about -20.5. Never stack them.
-- **Twin rescaling is only as good as its twin.** RVB's automatic twin gives 0.0 to 0.6 % bias;
-  HVA's twin is a different state (-11.25) and rescaling overshoots by 5 to 6 %. On the Clifford
-  grid every HVA point is a ground state or has zero energy, so a scalable Clifford twin does
-  not exist for HVA on this lattice.
-- **The benchmark instance is still easy (M3).** At the exact parameters the state is a product
-  of singlets, which symmetry filtering suits unusually well. The generic point (θ = 0.3)
-  confirms the stack away from it, but harder lattices are needed before generalising.
+- **Correct-then-filter is exact for independent readout errors.** It inverts the calibrated
+  tensored channel on the full outcome distribution, projects onto the singlet sector and
+  renormalises. That caps it at about 20 qubits; larger lattices need a sector-restricted
+  version.
+- **Twin rescaling works after filtering, even for HVA.** The residual noise inside the singlet
+  sector damps states almost uniformly, the assumption rescaling needs. The automatic twin
+  needs a classical simulation (the π/4 grid is not Clifford), the same 20-qubit limit.
+- **Symmetry filtering and ZNE must not be combined.** They over-correct by about 8 % even with
+  gate noise alone.
+- **The bootstrap standard error of correct-then-filter matches the spread between repeats,**
+  within the precision 8 repeats allow (ratios 0.6 to 1.7).
+- **The benchmark instance is still easy (M3).** The exact-parameter state is a product of
+  singlets. The generic point and the per-source checks confirm the stack away from it, but
+  harder lattices are needed before generalising.
 
 Original plan:
 

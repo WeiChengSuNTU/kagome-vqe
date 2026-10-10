@@ -228,55 +228,68 @@ simulation costs about 2.5 s per energy and HVA parameter shift needs 72 energie
 ### Error mitigation (roadmap M2)
 
 Produced by `kagome-vqe benchmark configs/m2_mitigation.toml --point 0 --repeats 8` and
-`--point 0.3`: each stack estimates the energy at fixed parameters 8 times on
-`FakeGuadalupeV2` noise, 4096 shots per basis. Entries are the mean, with its bias against the
-noise-free energy in brackets; the spread between repeats is 0.04 to 0.15. ⚠ marks a mean
-significantly below -18, which by the variational principle is an artefact. One-off shots are
-given for HVA / RVB, since the twin search differs.
+`--point 0.3`, plus `--set backend.noise=readout` and `--set backend.noise=gates` to apply one
+error source at a time. Each cell gives the relative bias of the mean against the noise-free
+energy, in %, for HVA / RVB, from 8 repeats at 4096 shots per basis on `FakeGuadalupeV2`. The
+spread between repeats is 0.03 to 0.15 in energy. ⚠ marks a mean significantly below -18, which
+by the variational principle is an artefact.
 
-| stack | HVA, exact params (-18.00) | HVA, θ = 0.3 (-16.66) | RVB, exact params (-18.00) | RVB, θ = 0.3 (-17.62) | shots per energy | one-off shots |
+| stack | full noise, exact params | full noise, θ = 0.3 | readout noise only, θ = 0.3 | gate noise only, θ = 0.3 | shots per energy | one-off shots |
 |---|---|---|---|---|---|---|
-| none | -12.80 (+5.20) | -11.90 (+4.76) | -12.71 (+5.29) | -12.51 (+5.10) | 12,288 | 0 / 0 |
-| readout | -14.02 (+3.98) | -12.98 (+3.68) | -13.91 (+4.09) | -13.68 (+3.93) | 12,288 | 32,768 / 32,768 |
-| symmetry | -16.44 (+1.56) | -15.34 (+1.31) | -16.37 (+1.63) | -16.11 (+1.50) | 12,288 | 0 / 0 |
-| readout+symmetry | -18.06 (-0.06) ⚠ | -16.77 (-0.12) | -17.98 (+0.02) | -17.66 (-0.04) | 12,288 | 32,768 / 32,768 |
-| zne | -16.16 (+1.84) | -15.08 (+1.58) | -16.18 (+1.82) | -15.99 (+1.63) | 36,864 | 0 / 0 |
-| readout+zne | -17.69 (+0.31) | -16.42 (+0.23) | -17.70 (+0.30) | -17.45 (+0.16) | 36,864 | 98,304 / 98,304 |
-| readout+symmetry+zne | -20.54 (-2.54) ⚠ | -18.95 (-2.30) ⚠ | -20.52 (-2.52) ⚠ | -20.17 (-2.56) ⚠ | 36,864 | 98,304 / 98,304 |
-| twin | -19.03 (-1.03) ⚠ | -17.69 (-1.03) | -18.04 (-0.04) | -17.72 (-0.11) | 12,288 | 49,152 / 49,152 |
-| readout+twin | -18.98 (-0.98) ⚠ | -17.58 (-0.93) | -18.15 (-0.15) ⚠ | -17.82 (-0.21) | 12,288 | 81,920 / 81,920 |
-| readout+symmetry+twin | -17.72 (+0.28) | -16.47 (+0.19) | -17.94 (+0.06) | -17.61 (+0.00) | 12,288 | 81,920 / 81,920 |
+| none | +28.91 / +29.41 | +28.56 / +28.97 | +8.02 / +8.44 | +22.15 / +22.38 | 12,288 | 0 |
+| readout | +22.12 / +22.72 | +22.07 / +22.33 | -0.03 / -0.02 | +22.04 / +22.33 | 12,288 | 32,768 |
+| symmetry | +8.67 / +9.03 | +7.89 / +8.54 | +0.69 / +0.69 | +4.46 / +4.99 | 12,288 | 0 |
+| readout+symmetry | +5.02 / +5.18 | +4.08 / +4.75 | -0.07 / +0.06 | +4.30 / +4.91 | 12,288 | 32,768 |
+| zne | +10.25 / +10.11 | +9.49 / +9.24 | +8.02 / +8.44 | +1.45 / +0.88 | 36,864 | 0 |
+| readout+zne | +1.73 / +1.66 | +1.40 / +0.92 | -0.03 / -0.02 | +1.39 / +0.94 | 36,864 | 98,304 |
+| readout+symmetry+zne | -7.62⚠ / -7.82⚠ | -8.14 / -8.19⚠ | -0.07 / +0.06 | -7.51 / -7.72⚠ | 36,864 | 98,304 |
+| twin | -5.72⚠ / -0.20 | -6.20 / -0.61 | -0.79 / +0.43 | -5.29 / -1.14 | 12,288 | 49,152 |
+| readout+twin | -5.45⚠ / -0.81⚠ | -5.56 / -1.19 | -0.66 / -0.07 | -5.14 / -1.01 | 12,288 | 81,920 |
+| **readout+symmetry+twin** | +0.27 / +0.36 | -0.34 / -0.15 | -0.06 / -0.06 | +0.27 / +0.43 | 12,288 | 81,920 |
 
-- **Chosen stack: readout correction plus symmetry filtering.** It removes nearly all of the
-  29 % bias, to 0.14 to 0.70 %, with no extra shots per energy and 32,768 one-off calibration
-  shots. It needs a total-spin singlet ansatz, which RVB and HVA are.
-- **It slightly overshoots.** Every case but one sits a little below the noise-free value, and
-  HVA at the exact parameters lands 2.5 standard errors below -18. The readout correction is
-  calibrated on all shots but applied to the post-selected ones, which likely over-corrects.
-- **Do not stack symmetry filtering with ZNE.** Post-selection breaks the multiplicative noise
-  model that exponential extrapolation assumes, and the result overshoots to about -20.5.
-- **Without symmetry, readout plus ZNE is the fallback**, at 0.9 to 1.7 % bias for three times
-  the shots per energy. It works for any ansatz.
-- **Twin rescaling depends on the twin.** RVB's automatic twin works (0.2 to 0.6 %); HVA's
-  lies far from the target state, and rescaling overshoots by 5 to 6 %.
+- **Chosen stack: readout correction, then symmetry filtering, then twin rescaling.** Its bias
+  is at most 0.43 % in every setting: full noise at both points, readout noise only and gate
+  noise only. A method that works on each error source separately is not relying on errors
+  cancelling. It costs no extra shots per energy, plus 81,920 one-off shots (readout
+  calibration and twin).
+- **Why the twin works after filtering.** Filtering leaves only noise inside the singlet sector.
+  That residual appears to damp every singlet state by about the same factor, which is exactly
+  what rescaling assumes. Without the filter, HVA's twin overshoots by 5 to 6 %.
+- **Readout correction plus symmetry filtering alone leaves a 4 to 5 % gate-noise residual,**
+  which the filter cannot see. Its standard error comes from a bootstrap over shots and agrees
+  with the spread between repeats.
+- **Fallback for ansatzes without the singlet symmetry: readout correction plus ZNE,** at 0.9
+  to 1.7 % bias in every setting and three times the shots per energy.
+- **Never combine symmetry filtering with ZNE.** Post-selection removes noise
+  non-multiplicatively, and the extrapolation over-corrects by about 8 % even with gate noise
+  alone.
+- **Limits.** Correct-then-filter works on the full outcome distribution, which caps it at about
+  20 qubits. The automatic twin needs a classical simulation, which has the same limit. Both
+  need replacing before larger lattices (M3).
 
-The chosen stack in a full optimisation (`configs/m2_mitigated_vqe.toml`), with the M1-recommended
-optimisers, on the same noise:
+The chosen stack in a full optimisation (`configs/m2_mitigated_vqe.toml`), with the
+M1-recommended optimisers, on full `FakeGuadalupeV2` noise:
 
 | run | final energy, re-measured | relative error | noise-free energy of final parameters | total shots |
 |---|---|---|---|---|
-| HVA, plain SPSA | -18.083 ± 0.034 ⚠ | 0.46 % | -17.991 | 1,323,008 |
-| RVB, ADAM with parameter shift | -17.967 ± 0.035 | 0.19 % | -17.974 | 1,559,552 |
+| HVA, plain SPSA | -17.958 ± 0.116 | 0.23 % | -17.995 | 1,372,160 |
+| RVB, ADAM with parameter shift | -17.898 ± 0.068 | 0.57 % | -17.961 | 1,608,704 |
 
-Unmitigated, these runs end near -12.7 (29 % error). HVA's reading lies 2.4 standard errors
-below -18: the overshoot of the readout-plus-symmetry stack, not a better answer.
+Unmitigated, these runs end near -12.7 (29 % error). Neither reading lies below -18.
 
+**Correction history.** The first M2 result (commit `c9272e3`) recommended readout plus symmetry
+alone, applied in the opposite order: filter first, then correct each shot. The documentation
+worktree showed that this was two errors cancelling. With readout noise alone, it over-corrected
+by about 9 % (-19.57 instead of -18). Under full noise that over-correction happened to cancel
+the gate-noise residual on this device. Commit `56aadd3` reversed the order and added the
+noise-source switch. The original results remain in `results/m2-evaluation-*` and
+`results/m2_vqe-summary`.
 
 ## Roadmap
 
 Unmitigated noisy runs plateau near -12.7 because of circuit and readout noise. Milestones M0
 (an honest noisy simulator), M1 (better gradients) and M2 (error mitigation, which brings the
-error to 0.2 to 0.5 %) are done. [`docs/roadmap.md`](docs/roadmap.md) records the
+bias below 0.5 % on every error source separately) are done. [`docs/roadmap.md`](docs/roadmap.md) records the
 diagnosis, the improvement directions (parameter-shift gradients, depth compression, error
 mitigation, subspace methods such as QSE and Krylov diagonalisation) and the milestone plan.
 

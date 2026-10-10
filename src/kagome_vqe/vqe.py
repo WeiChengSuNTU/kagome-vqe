@@ -633,6 +633,7 @@ class FixedPointResult:
             "bias": self.bias,
             "relative_bias": self.relative_bias,
             "below_ground": self.below_ground,
+            "kept_fraction": _find(self.description, "mean_kept_fraction"),
             "repeats": int(self.energies.size),
             "energies": self.energies.tolist(),
             "reported_stds": self.stds.tolist(),
@@ -641,6 +642,18 @@ class FixedPointResult:
             "wall_time_s": self.wall_time_s,
             "estimator": self.description,
         }
+
+
+def _find(tree: Any, key: str) -> Any:
+    """First value stored under ``key`` anywhere in nested estimator descriptions, else None."""
+    if isinstance(tree, dict):
+        if tree.get(key) is not None:
+            return tree[key]
+        for value in tree.values():
+            found = _find(value, key)
+            if found is not None:
+                return found
+    return None
 
 
 def evaluate_fixed(

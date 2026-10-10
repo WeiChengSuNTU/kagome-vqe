@@ -18,8 +18,10 @@ All notable changes to this project are documented here. The format follows
 - `kagome-vqe benchmark --point X --repeats N` evaluates every combo at fixed parameters and
   writes a bias-and-spread table. New config `m2_mitigation.toml`.
 - `transpile.fold_two_qubit_gates`; `IsaProblem` keeps the logical observable.
+- `backend.noise = "readout" | "gates"` applies one error source at a time on `aer_noisy`.
+- Evaluation summaries record the kept fraction of symmetry filtering (`kept_fraction`).
 - Configs `m2_mitigation.toml` (fixed-point study) and `m2_mitigated_vqe.toml` (optimisation with
-  the chosen readout + symmetry stack).
+  the chosen readout + symmetry + twin stack).
 
 ### Changed
 
@@ -43,6 +45,11 @@ All notable changes to this project are documented here. The format follows
 - README noisy FakeGuadalupeV2 benchmark table.
 
 ### Fixed
+
+- Readout correction combined with symmetry filtering was biased: filtering first and then
+  weighting kept shots over-corrected readout errors by about 9 %, which on FakeGuadalupeV2
+  happened to cancel the gate-noise residual (found by the documentation worktree). The
+  combination now corrects the outcome distribution first, then filters.
 
 - `docs/physics.md` wrongly stated that parameter-shift gradients do not apply to these
   ansatzes; they apply gate by gate.

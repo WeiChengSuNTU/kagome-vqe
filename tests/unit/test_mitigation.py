@@ -291,6 +291,7 @@ def test_evaluate_fixed_and_cli(tmp_path: Path) -> None:
     assert summary["mitigation"] == "readout+symmetry"
     # a plain bool, so JSON stores true/false rather than the string "False"
     assert summary["below_ground"] is False
+    assert summary["kept_fraction"] == pytest.approx(1.0, abs=1e-6)  # noise-free shots all kept
 
     config = tmp_path / "bench.toml"
     config.write_text(
