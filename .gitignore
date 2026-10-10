@@ -1,5 +1,6 @@
 # Reference material (contains the original notebook with credentials; never commit)
-references/
+# No trailing slash, so a symlink in a sibling worktree matches too.
+/references
 
 # Secrets and local environment
 .env
@@ -25,7 +26,7 @@ coverage.xml
 htmlcov/
 
 # Experiment outputs
-results/
+/results
 *.ipynb_checkpoints/
 
 # Editors / OS
