@@ -16,9 +16,16 @@ individual shots instead, so this module measures the circuit itself:
   every axis, so in each measurement basis (X, Y or Z) a noise-free shot always has exactly
   ``n/2`` ones. Shots that violate this were corrupted by noise and are discarded.
 
-When both are enabled, shots are filtered first and the readout of the kept shots is then
-corrected. That combination is a heuristic: the calibration describes all shots, not only the
-post-selected ones.
+When both are enabled the order matters. Filtering first and then weighting the kept shots is
+biased: the filter already removes nearly every single readout flip, so the weights over-correct
+each two-body term by about ``1 / ((1 - 2 e_a)(1 - 2 e_b))``, roughly 9 % on FakeGuadalupeV2.
+Under full noise that over-correction happened to cancel the gate-noise residual the filter
+cannot see, which made the biased combination look accurate. The combination therefore uses
+*correct, then filter*: the measured distribution over all ``2**n`` outcomes is multiplied by the
+inverse of the calibrated tensored readout channel, giving quasi-probabilities, which are then
+restricted to the singlet sector and renormalised. This is exact for independent readout errors
+and costs ``O(n 2**n)`` per basis, so it is limited to :data:`SECTOR_AWARE_MAX_QUBITS` qubits.
+Its standard error comes from a bootstrap over shots.
 """
 
 from __future__ import annotations
@@ -37,10 +44,16 @@ from qiskit.quantum_info import SparsePauliOp
 from qiskit.transpiler import generate_preset_pass_manager
 
 from kagome_vqe.config import BackendConfig
-from kagome_vqe.estimators import DENSITY_MATRIX_MAX_QUBITS, EnergyBatch, RuntimeSession
+from kagome_vqe.estimators import (
+    DENSITY_MATRIX_MAX_QUBITS,
+    EnergyBatch,
+    RuntimeSession,
+    aer_noise_model,
+)
 from kagome_vqe.transpile import IsaProblem
 
 __all__ = [
+    "SECTOR_AWARE_MAX_QUBITS",
     "CountsEnergy",
     "MeasurementGroup",
     "ReadoutCalibration",
@@ -53,6 +66,11 @@ FloatArray = NDArray[np.float64]
 BoolArray = NDArray[np.bool_]
 
 _SIGNS = np.array([1.0, -1.0])
+
+SECTOR_AWARE_MAX_QUBITS = 20
+"""Largest register for the distribution-level readout correction (``2**n`` quasi-probabilities)."""
+
+_BOOTSTRAP = 50
 
 
 @dataclass(frozen=True, slots=True)
@@ -109,6 +127,16 @@ class ReadoutCalibration:
     e0: FloatArray
     e1: FloatArray
 
+    def inverse_matrices(self) -> FloatArray:
+        """Per-qubit inverse confusion matrices, shape ``(n, 2, 2)`` (rows: true outcome)."""
+        confusion = np.stack(
+            [
+                np.array([[1.0 - e0, e1], [e0, 1.0 - e1]])
+                for e0, e1 in zip(self.e0, self.e1, strict=True)
+            ]
+        )
+        return np.asarray(np.linalg.inv(confusion), dtype=float)
+
     def weights(self) -> FloatArray:
         """Per-qubit unbiased weights ``v_q[b] = ([1, -1] A_q^{-1})[b]``, shape ``(n, 2)``."""
         det = 1.0 - self.e0 - self.e1
@@ -147,6 +175,30 @@ def _group_energies(
     return float(per_shot.mean()), sem, shots
 
 
+def _all_bitstrings(n: int) -> BoolArray:
+    """``(2**n, n)`` table; row ``i`` holds the bits of ``i`` with bit ``j`` in column ``j``."""
+    return ((np.arange(2**n)[:, None] >> np.arange(n)) & 1).astype(bool)
+
+
+def _apply_inverse(probs: FloatArray, inverses: FloatArray) -> FloatArray:
+    """Apply ``inverse_q`` to qubit ``q`` of a distribution indexed by ``sum_j b_j 2**j``."""
+    n = inverses.shape[0]
+    tensor = probs.reshape([2] * n)  # axis 0 is the most significant bit, qubit n - 1
+    for q in range(n):
+        axis = n - 1 - q
+        tensor = np.moveaxis(np.tensordot(inverses[q], tensor, axes=([1], [axis])), 0, axis)
+    return np.asarray(tensor.reshape(-1), dtype=float)
+
+
+def _sector_energy(
+    counts: FloatArray, values: FloatArray, mask: BoolArray, inverses: FloatArray
+) -> tuple[float, float]:
+    """Correct-then-filter energy of one basis and the kept quasi-probability weight."""
+    quasi = _apply_inverse(counts / counts.sum(), inverses)
+    kept = float(quasi[mask].sum())
+    return float((quasi * values)[mask].sum() / kept), kept
+
+
 class _SamplerRunner(Protocol):
     def run(self, pubs: list[Any], shots: int) -> tuple[Any, float, str | None]: ...
 
@@ -158,14 +210,23 @@ class _SamplerRunner(Protocol):
 class _AerSampler:
     """``BackendSamplerV2`` over an ``AerSimulator``, fresh seed per call."""
 
-    def __init__(self, backend: Any | None, method: str, seeds: np.random.Generator) -> None:
+    def __init__(
+        self,
+        backend: Any | None,
+        method: str,
+        seeds: np.random.Generator,
+        noise_model: Any | None = None,
+    ) -> None:
         from qiskit.primitives import BackendSamplerV2
         from qiskit_aer import AerSimulator
 
+        options: dict[str, Any] = {"method": method}
+        if noise_model is not None:
+            options["noise_model"] = noise_model
         simulator = (
-            AerSimulator(method=method)
+            AerSimulator(**options)
             if backend is None or isinstance(backend, AerSimulator)
-            else AerSimulator.from_backend(backend, method=method)
+            else AerSimulator.from_backend(backend, **options)
         )
         self._sampler = BackendSamplerV2(backend=simulator)
         self._seeds = seeds
@@ -248,6 +309,24 @@ class CountsEnergy:
         self._n = problem.logical_observable.num_qubits
         self._keep_ones = self._n // 2 if symmetry else None
         self._groups, self._constant = measurement_plan(problem.logical_observable)
+        self._sector_aware = readout and symmetry
+        if self._sector_aware:
+            if self._n > SECTOR_AWARE_MAX_QUBITS:
+                msg = f"readout + symmetry needs <= {SECTOR_AWARE_MAX_QUBITS} qubits, got {self._n}"
+                raise ValueError(msg)
+            table = _all_bitstrings(self._n)
+            self._sector_mask = table.sum(axis=1) == self._n // 2
+            signs = 1.0 - 2.0 * table
+            self._group_values = [
+                np.sum(
+                    [
+                        c * np.prod(signs[:, list(s)], axis=1)
+                        for c, s in zip(g.coeffs, g.supports, strict=True)
+                    ],
+                    axis=0,
+                )
+                for g in self._groups
+            ]
         self._isa_target = backend if cfg.kind in ("aer_noisy", "fake", "ibm") else None
         self._circuits = [self._measurement_circuit(g.basis) for g in self._groups]
         self._weights = np.tile(_SIGNS, (self._n, 1))
@@ -264,7 +343,12 @@ class CountsEnergy:
                     if noisy and self._n <= DENSITY_MATRIX_MAX_QUBITS
                     else ("statevector" if not noisy else "automatic")
                 )
-            self._runner = _AerSampler(backend if noisy else None, method, self._seeds)
+            self._runner = _AerSampler(
+                backend if noisy else None,
+                method,
+                self._seeds,
+                aer_noise_model(backend, cfg.noise) if noisy else None,
+            )
 
     # -- circuits -----------------------------------------------------------------------------
 
@@ -313,6 +397,7 @@ class CountsEnergy:
             "readout_mitigation": self._readout,
             "readout_shots": self._readout_shots if self._readout else 0,
             "symmetry_filter": self._keep_ones is not None,
+            "readout_symmetry_order": "correct_then_filter" if self._sector_aware else None,
             "mean_kept_fraction": float(np.mean(self._kept_fraction))
             if self._kept_fraction
             else None,
@@ -357,6 +442,23 @@ class CountsEnergy:
 
     # -- evaluation ---------------------------------------------------------------------------
 
+    def _sector_aware_group(self, bits: BoolArray, g: int) -> tuple[float, float, float]:
+        """Correct-then-filter energy, bootstrap standard error and kept quasi weight."""
+        assert self.calibration is not None
+        index = (bits.astype(np.int64) << np.arange(self._n)).sum(axis=1)
+        counts = np.bincount(index, minlength=2**self._n).astype(float)
+        inverses = self.calibration.inverse_matrices()
+        values, mask = self._group_values[g], self._sector_mask
+        energy, kept = _sector_energy(counts, values, mask, inverses)
+        shots = int(counts.sum())
+        resampled = [
+            _sector_energy(
+                self._seeds.multinomial(shots, counts / shots).astype(float), values, mask, inverses
+            )[0]
+            for _ in range(_BOOTSTRAP)
+        ]
+        return energy, float(np.std(resampled, ddof=1)), kept
+
     def evaluate(self, params: FloatArray, *, shots: int | None = None) -> EnergyBatch:
         """Measure every basis for each parameter row and post-process the shots."""
         params = np.atleast_2d(np.asarray(params, dtype=float))
@@ -374,11 +476,15 @@ class CountsEnergy:
             for row in range(k):
                 row_bits = data[row] if data.ndim else data
                 bits = row_bits.to_bool_array(order="little")
-                mean, sem, used = _group_energies(bits, group, self._weights, self._keep_ones)
+                if self._sector_aware:
+                    mean, sem, kept = self._sector_aware_group(bits, g)
+                    self._kept_fraction.append(kept)
+                else:
+                    mean, sem, used = _group_energies(bits, group, self._weights, self._keep_ones)
+                    if self._keep_ones is not None:
+                        self._kept_fraction.append(used / bits.shape[0])
                 energies[row] += mean
                 variances[row] += sem**2
-                if self._keep_ones is not None:
-                    self._kept_fraction.append(used / bits.shape[0])
         return EnergyBatch(
             energies=energies,
             stds=np.sqrt(variances),

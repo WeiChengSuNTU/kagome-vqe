@@ -93,6 +93,44 @@ def test_readout_weights_are_unbiased(rng: np.random.Generator) -> None:
         ReadoutCalibration(np.array([0.5]), np.array([0.5])).weights()
 
 
+def test_distribution_inverse_undoes_the_readout_channel(rng: np.random.Generator) -> None:
+    from kagome_vqe.mitigation.counts import _apply_inverse
+
+    e0, e1 = np.array([0.02, 0.05, 0.1]), np.array([0.04, 0.01, 0.08])
+    true = rng.dirichlet(np.ones(8))
+    cal = ReadoutCalibration(e0, e1)
+    confusion = np.linalg.inv(cal.inverse_matrices())
+    measured = _apply_inverse(true, confusion)  # applying A itself is the forward channel
+    assert measured.sum() == pytest.approx(1.0)
+    assert _apply_inverse(measured, cal.inverse_matrices()) == pytest.approx(true, abs=1e-12)
+
+
+@pytest.mark.fake
+def test_correct_then_filter_is_unbiased_for_readout_noise(hamiltonian: SparsePauliOp) -> None:
+    """Regression: filter-then-weight over-corrected readout-only noise by about 9 %."""
+    backend = resolve_fake_backend("FakeGuadalupeV2")
+    problem = compile_for_backend(
+        HVAnsatz().build(), hamiltonian, backend, initial_layout=GUADALUPE_HEAVY_HEX_LOOP
+    )
+    cfg = BackendConfig(kind="aer_noisy", name="FakeGuadalupeV2", shots=16384, noise="readout")
+    with CountsEnergy(
+        problem, cfg, backend, readout=True, symmetry=True, readout_shots=32768, seed=11
+    ) as est:
+        assert est.description["readout_symmetry_order"] == "correct_then_filter"
+        batch = est.evaluate(np.array([[0.0, 0.0], [0.3, 0.3]]))
+    assert batch.energies[0] == pytest.approx(-18.0, abs=0.06)
+    assert batch.energies[1] == pytest.approx(-16.657, abs=0.08)
+    assert np.all(batch.stds > 0)
+
+
+def test_noise_source_switch_validation() -> None:
+    assert BackendConfig(kind="aer_noisy", name="FakeGuadalupeV2", noise="gates").label() == (
+        "aer_noisy:FakeGuadalupeV2[gates noise]"
+    )
+    with pytest.raises(ValidationError, match="noise"):
+        BackendConfig(kind="aer_ideal", noise="readout")
+
+
 def test_counts_energy_matches_statevector(hamiltonian: SparsePauliOp) -> None:
     problem = compile_for_backend(HVAnsatz().build(), hamiltonian, None)
     x = np.array([[0.3, 0.2], [0.0, 0.0]])

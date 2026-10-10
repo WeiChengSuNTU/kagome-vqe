@@ -47,6 +47,7 @@ __all__ = [
     "RuntimeEnergy",
     "RuntimeSession",
     "StatevectorEnergy",
+    "aer_noise_model",
     "make_estimator",
 ]
 
@@ -585,6 +586,18 @@ class RuntimeEnergy(_PrimitiveEnergy):
         return self._unpack(job, result, params, elapsed, shots or self._cfg.shots)
 
 
+def aer_noise_model(backend: Any, noise: str) -> Any | None:
+    """Noise model restricted to one error source; ``None`` means the backend's full model."""
+    if noise == "full":
+        return None
+    from qiskit_aer.noise import NoiseModel
+
+    gates = noise == "gates"
+    return NoiseModel.from_backend(
+        backend, gate_error=gates, thermal_relaxation=gates, readout_error=not gates
+    )
+
+
 def _base_estimator(
     cfg: BackendConfig, problem: IsaProblem, backend: Any | None, seed: int | None
 ) -> EnergyEstimator:
@@ -595,7 +608,12 @@ def _base_estimator(
         return AerEnergy(problem, shots=cfg.shots, seed=seed, method=cfg.aer_method)
     if cfg.kind == "aer_noisy":
         return AerEnergy(
-            problem, shots=cfg.shots, noise_backend=backend, seed=seed, method=cfg.aer_method
+            problem,
+            shots=cfg.shots,
+            noise_backend=backend,
+            noise_model=aer_noise_model(backend, cfg.noise),
+            seed=seed,
+            method=cfg.aer_method,
         )
     if backend is None:
         msg = f"backend.kind={cfg.kind!r} needs a backend object"

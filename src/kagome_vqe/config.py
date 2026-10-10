@@ -231,6 +231,9 @@ class BackendConfig(_Frozen):
         final_shots: Shots for the single re-measurement of the optimiser's final parameters.
             This, not the minimum over the trace, is the reported energy: the minimum of noisy
             samples is biased low. ``None`` reuses ``shots``.
+        noise: ``aer_noisy`` only: which parts of the fake backend's noise model to apply,
+            ``"full"``, ``"readout"`` (measurement errors only) or ``"gates"`` (gate errors and
+            T1/T2, no readout errors). Used to see how mitigation acts on each error source.
         aer_method: Aer simulation method for ``aer_ideal``/``aer_noisy``. ``"auto"`` uses
             density matrices up to 12 active qubits (cost independent of shots) and statevector
             trajectories beyond.
@@ -260,11 +263,15 @@ class BackendConfig(_Frozen):
     retries: Annotated[int, Field(ge=0)] = 5
     job_timeout_s: Annotated[int, Field(ge=1)] = 3600
     aer_method: Literal["auto", "density_matrix", "statevector", "matrix_product_state"] = "auto"
+    noise: Literal["full", "readout", "gates"] = "full"
 
     @model_validator(mode="after")
     def _needs_name_and_shots(self) -> Self:
         if self.kind in ("aer_noisy", "fake", "ibm") and not self.name:
             msg = f"backend.kind={self.kind!r} requires backend.name"
+            raise ValueError(msg)
+        if self.noise != "full" and self.kind != "aer_noisy":
+            msg = "backend.noise only applies to kind = 'aer_noisy'"
             raise ValueError(msg)
         if self.kind != "statevector" and self.shots is None:
             msg = f"backend.kind={self.kind!r} samples measurements and requires backend.shots"
@@ -290,7 +297,8 @@ class BackendConfig(_Frozen):
 
     def label(self) -> str:
         """Short label for file names, e.g. ``"aer_noisy:FakeGuadalupeV2"``."""
-        return self.kind if self.name is None else f"{self.kind}:{self.name}"
+        base = self.kind if self.name is None else f"{self.kind}:{self.name}"
+        return base if self.noise == "full" else f"{base}[{self.noise} noise]"
 
 
 class ZneConfig(_Frozen):
