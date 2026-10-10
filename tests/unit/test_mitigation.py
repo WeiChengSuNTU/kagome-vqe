@@ -274,6 +274,22 @@ def test_make_estimator_assembles_the_stack(hamiltonian: SparsePauliOp) -> None:
         make_estimator(IDEAL, problem, None, mitigation=MitigationConfig(rescale=RescaleConfig()))
 
 
+def test_fresh_setup_redoes_the_twin_per_repeat() -> None:
+    """Regression: a twin measured once made every repeat share its noise."""
+    cfg = RunConfig(
+        name="twin",
+        backend=BackendConfig(kind="aer_ideal", shots=64, final_shots=64),
+        mitigation=MitigationConfig(rescale=RescaleConfig()),
+    )
+    fresh = evaluate_fixed(cfg, 0.3, repeats=3)
+    twins = fresh.description["noisy_twin_energy_per_setup"]
+    assert len(twins) == 3
+    assert len(set(twins)) == 3  # each repeat measured its own twin
+    assert fresh.description["fresh_setup_per_repeat"] is True
+    shared = evaluate_fixed(cfg, 0.3, repeats=3, fresh_setup=False)
+    assert len(shared.description["noisy_twin_energy_per_setup"]) == 1
+
+
 def test_evaluate_fixed_and_cli(tmp_path: Path) -> None:
     cfg = RunConfig(
         name="fixed",

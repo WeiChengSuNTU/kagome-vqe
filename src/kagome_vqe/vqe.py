@@ -572,7 +572,8 @@ class FixedPointResult:
         energies: One estimate per repeat, each with a fresh simulator seed.
         stds: Standard error each estimate reported.
         shots_per_evaluation: Circuit shots one estimate costs (all bases and scale factors).
-        setup_shots: One-off shots (readout calibration, twin measurement).
+        setup_shots: One-off shots per estimator (readout calibration, twin measurement); with a
+            fresh setup per repeat they are spent once per repeat.
         description: Estimator description, including calibration and twin details.
         wall_time_s: Total time.
     """
@@ -661,6 +662,7 @@ def evaluate_fixed(
     point: float | FloatArray,
     *,
     repeats: int = 10,
+    fresh_setup: bool = True,
     prepared: Prepared | None = None,
     settings: Settings | None = None,
 ) -> FixedPointResult:
@@ -669,7 +671,12 @@ def evaluate_fixed(
     Args:
         cfg: Run configuration; the optimiser settings are ignored.
         point: Ansatz parameters, or one value used for every parameter.
-        repeats: Independent estimates, each with a fresh simulator seed.
+        repeats: Independent estimates.
+        fresh_setup: Build a new estimator, with its own seed, for every repeat, so that one-off
+            measurements (readout calibration, twin) are redone each time. Then the spread
+            between repeats includes their noise, which a shared setup would hide: a twin
+            measured once shifts every repeat by the same amount. ``False`` shares one setup
+            and only resamples the energy itself.
         prepared: Output of :func:`prepare`, if available.
         settings: IBM credentials for ``backend.kind == "ibm"``.
     """
@@ -684,24 +691,44 @@ def evaluate_fixed(
     with StatevectorEnergy(logical) as sv:
         ideal = float(sv.evaluate(theta[None, :]).energies[0])
     groups = 0 if cfg.backend.is_exact else prep.problem.measurement_groups
+    phi = prep.parameter_map.expand(theta)[None, :]
+    seeds = np.random.default_rng(cfg.seed).integers(0, 2**31 - 1, size=repeats)
+
+    def open_estimator(seed: int) -> EnergyEstimator:
+        return make_estimator(
+            cfg.backend,
+            prep.problem,
+            prep.backend,
+            seed=seed,
+            mitigation=cfg.mitigation,
+            twin=prep.circuit_twin,
+        )
+
     start = time.perf_counter()
-    energies, stds = [], []
-    with make_estimator(
-        cfg.backend,
-        prep.problem,
-        prep.backend,
-        seed=cfg.seed,
-        mitigation=cfg.mitigation,
-        twin=prep.circuit_twin,
-    ) as estimator:
-        phi = prep.parameter_map.expand(theta)[None, :]
-        for _ in range(repeats):
-            batch = estimator.evaluate(phi)
+    energies: list[float] = []
+    stds: list[float] = []
+    setups: list[dict[str, Any]] = []
+    if fresh_setup:
+        for seed in seeds:
+            with open_estimator(int(seed)) as estimator:
+                batch = estimator.evaluate(phi)
+                setups.append(estimator.description)
             energies.append(float(batch.energies[0]))
             stds.append(float(batch.stds[0]))
-        description = estimator.description
+    else:
+        with open_estimator(int(seeds[0])) as estimator:
+            for _ in range(repeats):
+                batch = estimator.evaluate(phi)
+                energies.append(float(batch.energies[0]))
+                stds.append(float(batch.stds[0]))
+            setups.append(estimator.description)
     shots = cfg.backend.shots or 0
     per_eval = _shot_cost(cfg, groups, shots) - _shot_cost(cfg, groups, 0)
+    description = dict(setups[-1])
+    description["fresh_setup_per_repeat"] = fresh_setup
+    twin_energies = [_find(d, "noisy_twin_energy") for d in setups]
+    if any(e is not None for e in twin_energies):
+        description["noisy_twin_energy_per_setup"] = twin_energies
     return FixedPointResult(
         config=cfg,
         point=theta,
