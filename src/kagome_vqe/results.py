@@ -243,7 +243,7 @@ def write_benchmark_summary(runs: list[LoadedRun], out_dir: Path) -> tuple[Path,
     json_path = out_dir / "benchmark.json"
     json_path.write_text(json.dumps(rows, indent=2) + "\n")
     header = (
-        "| run | ansatz | optimizer | backend | final E (re-measured) | std bound | exact E "
+        "| run | ansatz | optimizer | backend | final E (re-measured) | reported std | exact E "
         "| rel. err | 2q gates | evaluations | total shots | time (s) |\n"
         "|---|---|---|---|---|---|---|---|---|---|---|---|\n"
     )

@@ -8,6 +8,24 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- Roadmap M2, error mitigation (`kagome_vqe.mitigation`, `RunConfig.mitigation`):
+  - `CountsEnergy` measures each basis through a sampler, corrects readout errors with
+    unbiased per-shot weights, filters shots outside the total-spin-singlet sector, and
+    reports exact standard errors.
+  - `ZneEnergy` folds two-qubit gates and extrapolates to zero noise with error propagation.
+  - `TwinRescaledEnergy` and `choose_twin` divide out the damping measured on a twin with a
+    classically known energy.
+- `kagome-vqe benchmark --point X --repeats N` evaluates every combo at fixed parameters and
+  writes a bias-and-spread table. New config `m2_mitigation.toml`.
+- `transpile.fold_two_qubit_gates`; `IsaProblem` keeps the logical observable.
+- Configs `m2_mitigation.toml` (fixed-point study) and `m2_mitigated_vqe.toml` (optimisation with
+  the chosen readout + symmetry stack).
+
+### Changed
+
+- The runtime session, retry and seeding logic is shared by estimator and sampler
+  (`estimators.RuntimeSession`).
+
 - Roadmap M1: gradient estimators separate from update rules (`optimizers.gradients`):
   forward and central differences, simultaneous perturbation, and parameter shift.
   `optimizer.gradient` selects one for ADAM or the new plain gradient descent (`type = "gd"`);

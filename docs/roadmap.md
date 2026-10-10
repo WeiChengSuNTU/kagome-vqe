@@ -351,7 +351,39 @@ Original plan:
   shift, SPSA and the hybrid on RVB and HVA. Plot best-so-far energy against shots spent.
 - **Exit:** a recommended default gradient per ansatz, recorded in the configs.
 
-### M2. Error-mitigation baseline
+### M2. Error-mitigation baseline (done)
+
+**Status, October 2026.** Code in commit `c9272e3`; results in `results/m2-evaluation-0`,
+`results/m2-evaluation-0p3` and `results/m2_vqe-summary`; full tables in the README under
+"Error mitigation".
+
+| check | result |
+|---|---|
+| each technique implemented as a composable estimator layer | readout correction and symmetry filtering (counts level), ZNE, twin rescaling; unit-tested |
+| energy at fixed points, per stack | 10 stacks x 2 ansatzes x 2 points (exact and θ = 0.3), 8 repeats each |
+| gap closed and variance cost | readout + symmetry: bias 0.14 to 0.70 % from 29 %, spread unchanged, no extra shots per energy |
+| mitigation stack chosen for hardware | readout correction + symmetry filtering; readout + ZNE as the fallback for non-singlet ansatzes |
+| full optimisation with the stack | HVA + SPSA -18.08 (0.46 %), RVB + ADAM parameter shift -17.97 (0.19 %) |
+| H1 hardware check | skipped for now, as with H0 |
+
+Findings and open problems:
+
+- **The chosen stack overshoots slightly.** Mitigated energies sit a little below the noise-free
+  value, and below -18 near the optimum: -18.06 at the exact HVA parameters, -18.08 at the end
+  of the HVA optimisation. The readout calibration describes all shots but is applied to the
+  post-selected ones. A sector-aware readout correction is the obvious next step.
+- **Symmetry filtering breaks ZNE.** Post-selection removes noise non-multiplicatively, so
+  exponential extrapolation over-corrects to about -20.5. Never stack them.
+- **Twin rescaling is only as good as its twin.** RVB's automatic twin gives 0.0 to 0.6 % bias;
+  HVA's twin is a different state (-11.25) and rescaling overshoots by 5 to 6 %. On the Clifford
+  grid every HVA point is a ground state or has zero energy, so a scalable Clifford twin does
+  not exist for HVA on this lattice.
+- **The benchmark instance is still easy (M3).** At the exact parameters the state is a product
+  of singlets, which symmetry filtering suits unusually well. The generic point (θ = 0.3)
+  confirms the stack away from it, but harder lattices are needed before generalising.
+
+Original plan:
+
 
 - **Deliverables:**
   - Client-side ZNE by gate folding.

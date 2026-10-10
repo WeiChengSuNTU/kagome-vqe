@@ -40,7 +40,7 @@ def test_defaults_reproduce_the_paper() -> None:
 def test_shipped_configs_parse(path: Path) -> None:
     if "combos" in load_toml(path):
         bench = load_benchmark_config(path)
-        assert len(bench.run_configs()) >= 4
+        assert len(bench.run_configs()) >= 1
     else:
         load_run_config(path)
 

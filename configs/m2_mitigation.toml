@@ -1,0 +1,123 @@
+# Roadmap M2: how much of the noise bias can mitigation remove?
+#
+# Not an optimisation: every combo estimates the energy at FIXED parameters, 8 times with fresh
+# simulator seeds, through one mitigation stack. Run it at the exact parameters and at a generic
+# point, where the noise-free energy is known classically:
+#   kagome-vqe benchmark configs/m2_mitigation.toml --point 0 --repeats 8
+#   kagome-vqe benchmark configs/m2_mitigation.toml --point 0.3 --repeats 8
+# The table reports the bias of the mean against the noise-free energy, the real spread
+# between repeats, the shot cost per energy (all bases and ZNE scale factors) and the one-off
+# setup shots (readout calibration, twin). Values below -18 are flagged: by the variational
+# principle they are artefacts.
+#
+# Shot budget per energy: 4096 shots per basis, 3 bases = 12288 circuit shots; ZNE triples
+# that (scale factors 1, 3, 5). Readout calibration: 2 circuits x 16384 shots once per
+# estimator (once per scale factor with ZNE). Twin: 3 bases x 16384 shots once.
+name = "m2"
+seed = 42
+
+[backend]
+kind = "aer_noisy"
+name = "FakeGuadalupeV2"
+shots = 4096
+final_shots = 16384
+optimization_level = 3
+initial_layout = [1, 2, 3, 5, 8, 11, 14, 13, 12, 10, 7, 4]
+
+[[combos]]
+ansatz = { type = "hva" }
+label = "hva_raw"
+
+[[combos]]
+ansatz = { type = "hva" }
+label = "hva_readout"
+mitigation = { readout = true }
+
+[[combos]]
+ansatz = { type = "hva" }
+label = "hva_symmetry"
+mitigation = { symmetry = true }
+
+[[combos]]
+ansatz = { type = "hva" }
+label = "hva_readout_symmetry"
+mitigation = { readout = true, symmetry = true }
+
+[[combos]]
+ansatz = { type = "hva" }
+label = "hva_zne"
+mitigation = { zne = { scales = [1, 3, 5], extrapolation = "exponential" } }
+
+[[combos]]
+ansatz = { type = "hva" }
+label = "hva_readout_zne"
+mitigation = { readout = true, zne = { scales = [1, 3, 5], extrapolation = "exponential" } }
+
+[[combos]]
+ansatz = { type = "hva" }
+label = "hva_readout_symmetry_zne"
+mitigation = { readout = true, symmetry = true, zne = { scales = [1, 3, 5], extrapolation = "exponential" } }
+
+[[combos]]
+ansatz = { type = "hva" }
+label = "hva_twin"
+mitigation = { rescale = { twin = "auto" } }
+
+[[combos]]
+ansatz = { type = "hva" }
+label = "hva_readout_twin"
+mitigation = { readout = true, rescale = { twin = "auto" } }
+
+[[combos]]
+ansatz = { type = "hva" }
+label = "hva_readout_symmetry_twin"
+mitigation = { readout = true, symmetry = true, rescale = { twin = "auto" } }
+
+[[combos]]
+ansatz = { type = "rvb" }
+label = "rvb_raw"
+
+[[combos]]
+ansatz = { type = "rvb" }
+label = "rvb_readout"
+mitigation = { readout = true }
+
+[[combos]]
+ansatz = { type = "rvb" }
+label = "rvb_symmetry"
+mitigation = { symmetry = true }
+
+[[combos]]
+ansatz = { type = "rvb" }
+label = "rvb_readout_symmetry"
+mitigation = { readout = true, symmetry = true }
+
+[[combos]]
+ansatz = { type = "rvb" }
+label = "rvb_zne"
+mitigation = { zne = { scales = [1, 3, 5], extrapolation = "exponential" } }
+
+[[combos]]
+ansatz = { type = "rvb" }
+label = "rvb_readout_zne"
+mitigation = { readout = true, zne = { scales = [1, 3, 5], extrapolation = "exponential" } }
+
+[[combos]]
+ansatz = { type = "rvb" }
+label = "rvb_readout_symmetry_zne"
+mitigation = { readout = true, symmetry = true, zne = { scales = [1, 3, 5], extrapolation = "exponential" } }
+
+[[combos]]
+ansatz = { type = "rvb" }
+label = "rvb_twin"
+mitigation = { rescale = { twin = "auto" } }
+
+[[combos]]
+ansatz = { type = "rvb" }
+label = "rvb_readout_twin"
+mitigation = { readout = true, rescale = { twin = "auto" } }
+
+[[combos]]
+ansatz = { type = "rvb" }
+label = "rvb_readout_symmetry_twin"
+mitigation = { readout = true, symmetry = true, rescale = { twin = "auto" } }

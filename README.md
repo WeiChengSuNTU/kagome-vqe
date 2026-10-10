@@ -96,6 +96,36 @@ Every run also records the noise-free energy of its parameters after each iterat
 (`track_ideal_energy`, on by default up to 20 qubits). On noisy backends this shows how good the
 parameters are, separately from the noise floor.
 
+## Error mitigation
+
+`[mitigation]` in a run config switches on any combination of four techniques. They are applied
+in this order: counts-level processing, then zero-noise extrapolation, then rescaling.
+
+```toml
+[mitigation]
+readout = true          # calibrate per-qubit readout errors, correct every shot
+symmetry = true         # keep only shots with n/2 ones in each basis (RVB and HVA only)
+zne = { scales = [1, 3, 5], extrapolation = "exponential" }   # fold CX gates, fit to zero noise
+rescale = { twin = "auto" }   # divide out the damping measured on a classically known twin
+```
+
+- **Readout correction** and **symmetry filtering** need individual shots, so they replace the
+  Estimator primitive with a sampler that measures each basis itself. Its standard errors are
+  exact, not the primitive's bound.
+- **Symmetry filtering** relies on the RVB and HVA states being total-spin singlets for every
+  parameter value. A singlet has zero magnetisation along every axis, so in every measurement
+  basis a noise-free shot has exactly six ones out of twelve.
+- **ZNE** multiplies the cost per energy by the number of scale factors.
+- **Twin rescaling** measures its twin once per run. The automatic twin needs a classical
+  simulation, which is fine up to about 20 qubits.
+
+Every technique works on Aer and through the IBM Quantum sampler. To measure what a stack
+reports at a state whose energy is known, evaluate at fixed parameters instead of optimising:
+
+```bash
+uv run kagome-vqe benchmark configs/m2_mitigation.toml --point 0 --repeats 8
+```
+
 ## Results directory
 
 Each run writes `results/<UTC timestamp>-<name>/`:
@@ -195,10 +225,58 @@ simulation costs about 2.5 s per energy and HVA parameter shift needs 72 energie
   choices. The noise-free errors per shot spent are plotted in
   `results/m1_ideal-summary/ideal_vs_shots.png`.
 
+### Error mitigation (roadmap M2)
+
+Produced by `kagome-vqe benchmark configs/m2_mitigation.toml --point 0 --repeats 8` and
+`--point 0.3`: each stack estimates the energy at fixed parameters 8 times on
+`FakeGuadalupeV2` noise, 4096 shots per basis. Entries are the mean, with its bias against the
+noise-free energy in brackets; the spread between repeats is 0.04 to 0.15. ⚠ marks a mean
+significantly below -18, which by the variational principle is an artefact. One-off shots are
+given for HVA / RVB, since the twin search differs.
+
+| stack | HVA, exact params (-18.00) | HVA, θ = 0.3 (-16.66) | RVB, exact params (-18.00) | RVB, θ = 0.3 (-17.62) | shots per energy | one-off shots |
+|---|---|---|---|---|---|---|
+| none | -12.80 (+5.20) | -11.90 (+4.76) | -12.71 (+5.29) | -12.51 (+5.10) | 12,288 | 0 / 0 |
+| readout | -14.02 (+3.98) | -12.98 (+3.68) | -13.91 (+4.09) | -13.68 (+3.93) | 12,288 | 32,768 / 32,768 |
+| symmetry | -16.44 (+1.56) | -15.34 (+1.31) | -16.37 (+1.63) | -16.11 (+1.50) | 12,288 | 0 / 0 |
+| readout+symmetry | -18.06 (-0.06) ⚠ | -16.77 (-0.12) | -17.98 (+0.02) | -17.66 (-0.04) | 12,288 | 32,768 / 32,768 |
+| zne | -16.16 (+1.84) | -15.08 (+1.58) | -16.18 (+1.82) | -15.99 (+1.63) | 36,864 | 0 / 0 |
+| readout+zne | -17.69 (+0.31) | -16.42 (+0.23) | -17.70 (+0.30) | -17.45 (+0.16) | 36,864 | 98,304 / 98,304 |
+| readout+symmetry+zne | -20.54 (-2.54) ⚠ | -18.95 (-2.30) ⚠ | -20.52 (-2.52) ⚠ | -20.17 (-2.56) ⚠ | 36,864 | 98,304 / 98,304 |
+| twin | -19.03 (-1.03) ⚠ | -17.69 (-1.03) | -18.04 (-0.04) | -17.72 (-0.11) | 12,288 | 49,152 / 49,152 |
+| readout+twin | -18.98 (-0.98) ⚠ | -17.58 (-0.93) | -18.15 (-0.15) ⚠ | -17.82 (-0.21) | 12,288 | 81,920 / 81,920 |
+| readout+symmetry+twin | -17.72 (+0.28) | -16.47 (+0.19) | -17.94 (+0.06) | -17.61 (+0.00) | 12,288 | 81,920 / 81,920 |
+
+- **Chosen stack: readout correction plus symmetry filtering.** It removes nearly all of the
+  29 % bias, to 0.14 to 0.70 %, with no extra shots per energy and 32,768 one-off calibration
+  shots. It needs a total-spin singlet ansatz, which RVB and HVA are.
+- **It slightly overshoots.** Every case but one sits a little below the noise-free value, and
+  HVA at the exact parameters lands 2.5 standard errors below -18. The readout correction is
+  calibrated on all shots but applied to the post-selected ones, which likely over-corrects.
+- **Do not stack symmetry filtering with ZNE.** Post-selection breaks the multiplicative noise
+  model that exponential extrapolation assumes, and the result overshoots to about -20.5.
+- **Without symmetry, readout plus ZNE is the fallback**, at 0.9 to 1.7 % bias for three times
+  the shots per energy. It works for any ansatz.
+- **Twin rescaling depends on the twin.** RVB's automatic twin works (0.2 to 0.6 %); HVA's
+  lies far from the target state, and rescaling overshoots by 5 to 6 %.
+
+The chosen stack in a full optimisation (`configs/m2_mitigated_vqe.toml`), with the M1-recommended
+optimisers, on the same noise:
+
+| run | final energy, re-measured | relative error | noise-free energy of final parameters | total shots |
+|---|---|---|---|---|
+| HVA, plain SPSA | -18.083 ± 0.034 ⚠ | 0.46 % | -17.991 | 1,323,008 |
+| RVB, ADAM with parameter shift | -17.967 ± 0.035 | 0.19 % | -17.974 | 1,559,552 |
+
+Unmitigated, these runs end near -12.7 (29 % error). HVA's reading lies 2.4 standard errors
+below -18: the overshoot of the readout-plus-symmetry stack, not a better answer.
+
+
 ## Roadmap
 
-Noisy runs plateau near -12.7 because of circuit and readout noise, not optimiser failure.
-Milestones M0, an honest noisy simulator, and M1, better gradients, are done. [`docs/roadmap.md`](docs/roadmap.md) records the
+Unmitigated noisy runs plateau near -12.7 because of circuit and readout noise. Milestones M0
+(an honest noisy simulator), M1 (better gradients) and M2 (error mitigation, which brings the
+error to 0.2 to 0.5 %) are done. [`docs/roadmap.md`](docs/roadmap.md) records the
 diagnosis, the improvement directions (parameter-shift gradients, depth compression, error
 mitigation, subspace methods such as QSE and Krylov diagonalisation) and the milestone plan.
 

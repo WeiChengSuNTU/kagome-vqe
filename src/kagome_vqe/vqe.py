@@ -616,7 +616,7 @@ class FixedPointResult:
         such a value is an artefact of the method, not a better answer.
         """
         sem = self.spread / np.sqrt(max(self.energies.size, 1))
-        return self.mean < self.exact_energy - 2 * sem
+        return bool(self.mean < self.exact_energy - 2 * sem)
 
     def summary(self) -> dict[str, Any]:
         """JSON-friendly summary."""

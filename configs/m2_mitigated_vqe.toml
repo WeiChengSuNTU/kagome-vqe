@@ -1,0 +1,31 @@
+# Roadmap M2 check: the M1-recommended optimisers on noisy FakeGuadalupeV2 with the M2-chosen
+# mitigation stack (readout correction + total-spin symmetry filtering).
+#   kagome-vqe benchmark configs/m2_mitigated_vqe.toml
+# Without mitigation these runs end at about -12.7 (29 % error). The stack adds no shots per
+# energy; readout calibration costs 2 x 16384 shots once.
+name = "m2_vqe"
+seed = 42
+x0_scale = 0.7853981633974483
+record_params = false
+track_ideal_energy = true
+
+[backend]
+kind = "aer_noisy"
+name = "FakeGuadalupeV2"
+shots = 4096
+final_shots = 16384
+optimization_level = 3
+initial_layout = [1, 2, 3, 5, 8, 11, 14, 13, 12, 10, 7, 4]
+
+[mitigation]
+readout = true
+symmetry = true
+
+[[combos]]
+ansatz = { type = "hva" }
+optimizer = { type = "spsa", maxiter = 50, lr = 0.01, perturbation = 0.1 }
+
+[[combos]]
+ansatz = { type = "rvb" }
+optimizer = { type = "adam", maxiter = 20, lr = 0.05, gradient = "parameter_shift" }
+shots = 1024

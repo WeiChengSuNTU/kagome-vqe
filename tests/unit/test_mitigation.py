@@ -251,6 +251,8 @@ def test_evaluate_fixed_and_cli(tmp_path: Path) -> None:
     assert not result.below_ground
     summary = result.summary()
     assert summary["mitigation"] == "readout+symmetry"
+    # a plain bool, so JSON stores true/false rather than the string "False"
+    assert summary["below_ground"] is False
 
     config = tmp_path / "bench.toml"
     config.write_text(
