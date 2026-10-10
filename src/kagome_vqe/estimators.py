@@ -36,7 +36,7 @@ from typing import Any, Literal, Protocol, Self, runtime_checkable
 import numpy as np
 from numpy.typing import NDArray
 
-from kagome_vqe.config import BackendConfig, Settings
+from kagome_vqe.config import BackendConfig, MitigationConfig, Settings
 from kagome_vqe.transpile import IsaProblem
 
 __all__ = [
@@ -45,6 +45,7 @@ __all__ = [
     "EnergyBatch",
     "EnergyEstimator",
     "RuntimeEnergy",
+    "RuntimeSession",
     "StatevectorEnergy",
     "make_estimator",
 ]
@@ -349,13 +350,184 @@ class AerEnergy(_PrimitiveEnergy):
         return self._run_pub(self._primitive, params, shots or self._configured_shots)
 
 
+class RuntimeSession:
+    """Lifecycle, seeding and retries for one qiskit-ibm-runtime primitive.
+
+    Owns the execution mode (job / session / batch) and an ``EstimatorV2`` or ``SamplerV2``
+    bound to it. :meth:`run` submits one job and retries transient failures: a job that fails or
+    exceeds ``job_timeout_s`` is cancelled and resubmitted up to ``retries`` times with
+    exponential back-off; if the session was closed meanwhile a new one is opened (which
+    re-enters the queue, so this is logged loudly). In local (fake) mode every job gets a fresh
+    simulator seed from ``seeds``.
+
+    Args:
+        backend: Real or fake ``BackendV2``.
+        cfg: Backend configuration (shots, resilience level, mode, retries, ...).
+        primitive: ``"estimator"`` or ``"sampler"``.
+        seeds: Seed stream for local mode.
+    """
+
+    def __init__(
+        self,
+        backend: Any,
+        cfg: BackendConfig,
+        primitive: Literal["estimator", "sampler"],
+        seeds: np.random.Generator,
+    ) -> None:
+        """Create the session wrapper; nothing is opened until ``__enter__``."""
+        self._backend = backend
+        self._cfg = cfg
+        self._kind = primitive
+        self._seeds = seeds
+        self._mode: Any = None
+        self.primitive: Any = None
+
+    def _next_seed(self) -> int:
+        return int(self._seeds.integers(0, 2**31 - 1))
+
+    def _options(self) -> dict[str, Any]:
+        options: dict[str, Any] = {}
+        if self._kind == "estimator":
+            options["resilience_level"] = self._cfg.resilience_level
+        if self._cfg.shots is not None:
+            options["default_shots"] = self._cfg.shots
+        if self._cfg.kind == "fake":
+            options["simulator"] = {"seed_simulator": self._next_seed()}
+        return options
+
+    def _open_mode(self) -> Any:
+        from qiskit_ibm_runtime import Batch, Session
+
+        if self._cfg.mode == "session":
+            return Session(backend=self._backend, max_time=self._cfg.max_time)
+        if self._cfg.mode == "batch":
+            return Batch(backend=self._backend, max_time=self._cfg.max_time)
+        return self._backend
+
+    def _make_primitive(self) -> Any:
+        options = self._options()
+        if self._kind == "sampler":
+            from qiskit_ibm_runtime import SamplerV2
+
+            return SamplerV2(mode=self._mode, options=options)
+        if self._cfg.estimator_impl == "executor":
+            from qiskit_ibm_runtime.executor_estimator import Estimator
+
+            return Estimator(mode=self._mode, options=options)
+        from qiskit_ibm_runtime import EstimatorV2
+
+        return EstimatorV2(mode=self._mode, options=options)
+
+    def __enter__(self) -> Self:
+        """Open the session/batch and create the primitive."""
+        self._mode = self._open_mode()
+        self.primitive = self._make_primitive()
+        log.info(
+            "runtime %s ready on %s (mode=%s, shots=%s)",
+            self._kind,
+            self._backend.name,
+            self._cfg.mode,
+            self._cfg.shots,
+        )
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: TracebackType | None,
+    ) -> None:
+        """Close the session/batch."""
+        close = getattr(self._mode, "close", None)
+        if callable(close):
+            close()
+        self._mode = None
+        self.primitive = None
+
+    def _mode_is_open(self) -> bool:
+        status = getattr(self._mode, "status", None)
+        if not callable(status):
+            return True  # plain backend mode has no lifecycle
+        try:
+            value = status()
+        except Exception:
+            return True
+        return value is None or str(value).lower() != "closed"  # local mode reports None
+
+    def _reopen(self) -> None:
+        log.warning(
+            "runtime %s closed; opening a new one (this re-enters the queue)", self._cfg.mode
+        )
+        close = getattr(self._mode, "close", None)
+        if callable(close):
+            with contextlib.suppress(Exception):
+                close()
+        self._mode = self._open_mode()
+        self.primitive = self._make_primitive()
+
+    def _refresh_seed(self) -> None:
+        """Local (fake) mode only: new simulator seed for every job."""
+        if self._cfg.kind != "fake":
+            return
+        simulator = getattr(getattr(self.primitive, "options", None), "simulator", None)
+        if simulator is None:
+            return
+        with contextlib.suppress(AttributeError, TypeError, ValueError):
+            simulator.seed_simulator = self._next_seed()
+
+    def run(self, pubs: list[Any], **kwargs: Any) -> tuple[Any, Any, float]:
+        """Submit one job with retries; returns ``(job, result, seconds)``."""
+        if self.primitive is None:
+            msg = "the runtime session must be used as a context manager"
+            raise RuntimeError(msg)
+        last_error: BaseException | None = None
+        for attempt in range(self._cfg.retries + 1):
+            job = None
+            start = time.perf_counter()
+            try:
+                if not self._mode_is_open():
+                    self._reopen()
+                self._refresh_seed()
+                job = self.primitive.run(pubs, **kwargs)
+                result = _job_result(job, self._cfg.job_timeout_s)
+                return job, result, time.perf_counter() - start
+            except (KeyboardInterrupt, SystemExit):
+                self._cancel(job)
+                raise
+            except _transient_errors() as exc:
+                last_error = exc
+                self._cancel(job)
+                if attempt >= self._cfg.retries:
+                    break
+                delay = min(60.0, 2.0**attempt)
+                log.warning(
+                    "runtime job failed (attempt %d/%d): %s; retrying in %.0fs",
+                    attempt + 1,
+                    self._cfg.retries + 1,
+                    exc,
+                    delay,
+                )
+                time.sleep(delay)
+        msg = f"runtime job failed after {self._cfg.retries + 1} attempts"
+        raise RuntimeError(msg) from last_error
+
+    @staticmethod
+    def _cancel(job: Any) -> None:
+        if job is None:
+            return
+        try:
+            status = job.status()
+            if str(status).upper() not in {"DONE", "ERROR", "CANCELLED"}:
+                job.cancel()
+        except Exception:
+            log.debug("could not cancel job", exc_info=True)
+
+
 class RuntimeEnergy(_PrimitiveEnergy):
     """qiskit-ibm-runtime estimator on a real device or a fake backend in local mode.
 
-    Handles execution modes (job / session / batch), error-mitigation options, and retries:
-    a job that fails or exceeds ``job_timeout_s`` is cancelled and resubmitted up to
-    ``retries`` times with exponential back-off; if the session was closed meanwhile a new one
-    is opened (which re-enters the queue, so this is logged loudly).
+    Execution modes, error-mitigation options (``resilience_level``) and retries are handled by
+    :class:`RuntimeSession`.
 
     Args:
         problem: ISA problem transpiled for ``backend``.
@@ -383,51 +555,12 @@ class RuntimeEnergy(_PrimitiveEnergy):
             shots=cfg.shots,
             seed=seed,
         )
-        self._backend = backend
         self._cfg = cfg
-        self._mode: Any = None
-        self._primitive: Any = None
-
-    # -- lifecycle ----------------------------------------------------------------------------
-
-    def _options(self) -> dict[str, Any]:
-        options: dict[str, Any] = {"resilience_level": self._cfg.resilience_level}
-        if self._cfg.shots is not None:
-            options["default_shots"] = self._cfg.shots
-        if self._cfg.kind == "fake":
-            options["simulator"] = {"seed_simulator": self._next_seed()}
-        return options
-
-    def _open_mode(self) -> Any:
-        from qiskit_ibm_runtime import Batch, Session
-
-        if self._cfg.mode == "session":
-            return Session(backend=self._backend, max_time=self._cfg.max_time)
-        if self._cfg.mode == "batch":
-            return Batch(backend=self._backend, max_time=self._cfg.max_time)
-        return self._backend
-
-    def _make_primitive(self) -> Any:
-        options = self._options()
-        if self._cfg.estimator_impl == "executor":
-            from qiskit_ibm_runtime.executor_estimator import Estimator
-
-            return Estimator(mode=self._mode, options=options)
-        from qiskit_ibm_runtime import EstimatorV2
-
-        return EstimatorV2(mode=self._mode, options=options)
+        self._session = RuntimeSession(backend, cfg, "estimator", self._seeds)
 
     def __enter__(self) -> Self:
-        """Open the session/batch and create the primitive."""
-        self._mode = self._open_mode()
-        self._primitive = self._make_primitive()
-        log.info(
-            "runtime estimator ready on %s (mode=%s, shots=%s, resilience=%d)",
-            self._backend.name,
-            self._cfg.mode,
-            self._cfg.shots,
-            self._cfg.resilience_level,
-        )
+        """Open the session/batch."""
+        self._session.__enter__()
         return self
 
     def __exit__(
@@ -437,121 +570,24 @@ class RuntimeEnergy(_PrimitiveEnergy):
         tb: TracebackType | None,
     ) -> None:
         """Close the session/batch."""
-        close = getattr(self._mode, "close", None)
-        if callable(close):
-            close()
-        self._mode = None
-        self._primitive = None
-
-    def _mode_is_open(self) -> bool:
-        status = getattr(self._mode, "status", None)
-        if not callable(status):
-            return True  # plain backend mode has no lifecycle
-        try:
-            value = status()
-        except Exception:
-            return True
-        return value is None or str(value).lower() != "closed"  # local mode reports None
-
-    def _reopen(self) -> None:
-        log.warning(
-            "runtime %s closed; opening a new one (this re-enters the queue)", self._cfg.mode
-        )
-        close = getattr(self._mode, "close", None)
-        if callable(close):
-            with contextlib.suppress(Exception):
-                close()
-        self._mode = self._open_mode()
-        self._primitive = self._make_primitive()
-
-    def _refresh_seed(self) -> None:
-        """Local (fake) mode only: new simulator seed for every job."""
-        if self._cfg.kind != "fake":
-            return
-        simulator = getattr(getattr(self._primitive, "options", None), "simulator", None)
-        if simulator is None:
-            return
-        with contextlib.suppress(AttributeError, TypeError, ValueError):
-            simulator.seed_simulator = self._next_seed()
-
-    # -- evaluation ---------------------------------------------------------------------------
+        self._session.__exit__(exc_type, exc, tb)
 
     def evaluate(self, params: FloatArray, *, shots: int | None = None) -> EnergyBatch:
         """Submit one PUB with retries."""
-        if self._primitive is None:
+        if self._session.primitive is None:
             msg = "RuntimeEnergy must be used as a context manager"
             raise RuntimeError(msg)
         params = _as_2d(params)
         precision = _precision(shots)
-        last_error: BaseException | None = None
-        for attempt in range(self._cfg.retries + 1):
-            job = None
-            start = time.perf_counter()
-            try:
-                if not self._mode_is_open():
-                    self._reopen()
-                self._refresh_seed()
-                pub = (self._problem.circuit, self._problem.observable, params)
-                job = (
-                    self._primitive.run([pub])
-                    if precision is None
-                    else self._primitive.run([pub], precision=precision)
-                )
-                result = _job_result(job, self._cfg.job_timeout_s)
-                return self._unpack(
-                    job, result, params, time.perf_counter() - start, shots or self._cfg.shots
-                )
-            except (KeyboardInterrupt, SystemExit):
-                self._cancel(job)
-                raise
-            except _transient_errors() as exc:
-                last_error = exc
-                self._cancel(job)
-                if attempt >= self._cfg.retries:
-                    break
-                delay = min(60.0, 2.0**attempt)
-                log.warning(
-                    "runtime job failed (attempt %d/%d): %s; retrying in %.0fs",
-                    attempt + 1,
-                    self._cfg.retries + 1,
-                    exc,
-                    delay,
-                )
-                time.sleep(delay)
-        msg = f"runtime evaluation failed after {self._cfg.retries + 1} attempts"
-        raise RuntimeError(msg) from last_error
-
-    @staticmethod
-    def _cancel(job: Any) -> None:
-        if job is None:
-            return
-        try:
-            status = job.status()
-            if str(status).upper() not in {"DONE", "ERROR", "CANCELLED"}:
-                job.cancel()
-        except Exception:
-            log.debug("could not cancel job", exc_info=True)
+        pub = (self._problem.circuit, self._problem.observable, params)
+        kwargs = {} if precision is None else {"precision": precision}
+        job, result, elapsed = self._session.run([pub], **kwargs)
+        return self._unpack(job, result, params, elapsed, shots or self._cfg.shots)
 
 
-def make_estimator(
-    cfg: BackendConfig,
-    problem: IsaProblem,
-    backend: Any | None,
-    *,
-    seed: int | None = None,
-    settings: Settings | None = None,
+def _base_estimator(
+    cfg: BackendConfig, problem: IsaProblem, backend: Any | None, seed: int | None
 ) -> EnergyEstimator:
-    """Pick the estimator implementation for ``cfg.kind``.
-
-    Args:
-        cfg: Backend configuration.
-        problem: ISA problem already compiled for ``backend``.
-        backend: The object from :func:`kagome_vqe.backends.resolve_backend` (``None`` for
-            statevector).
-        seed: Seeds the estimator's per-call seed stream.
-        settings: IBM credentials (unused here; the backend object already carries them).
-    """
-    del settings  # reserved for future per-job options
     if cfg.kind == "statevector":
         return StatevectorEnergy(problem, seed=seed)
     assert cfg.shots is not None  # guaranteed by BackendConfig validation
@@ -565,3 +601,68 @@ def make_estimator(
         msg = f"backend.kind={cfg.kind!r} needs a backend object"
         raise ValueError(msg)
     return RuntimeEnergy(problem, backend, cfg, seed=seed)
+
+
+def make_estimator(
+    cfg: BackendConfig,
+    problem: IsaProblem,
+    backend: Any | None,
+    *,
+    seed: int | None = None,
+    settings: Settings | None = None,
+    mitigation: MitigationConfig | None = None,
+    twin: tuple[FloatArray, float] | None = None,
+) -> EnergyEstimator:
+    """Pick the estimator for ``cfg.kind`` and wrap it in the requested mitigation.
+
+    The stack is built innermost first: counts-level processing (readout correction, symmetry
+    filtering) replaces the plain estimator when requested; ZNE wraps that; twin rescaling
+    wraps everything.
+
+    Args:
+        cfg: Backend configuration.
+        problem: ISA problem already compiled for ``backend``.
+        backend: The object from :func:`kagome_vqe.backends.resolve_backend` (``None`` for
+            statevector).
+        seed: Seeds the estimator's per-call seed stream.
+        settings: IBM credentials (unused here; the backend object already carries them).
+        mitigation: Error-mitigation settings; ``None`` or all-off gives the plain estimator.
+        twin: Circuit parameters and noise-free energy of the rescaling twin; required when
+            ``mitigation.rescale`` is set.
+    """
+    del settings  # reserved for future per-job options
+    if mitigation is None or not mitigation.enabled:
+        return _base_estimator(cfg, problem, backend, seed)
+
+    from kagome_vqe.mitigation import CountsEnergy, TwinRescaledEnergy, ZneEnergy
+
+    def inner(prob: IsaProblem) -> EnergyEstimator:
+        if mitigation.needs_counts:
+            return CountsEnergy(
+                prob,
+                cfg,
+                backend,
+                readout=mitigation.readout,
+                readout_shots=mitigation.readout_shots,
+                symmetry=mitigation.symmetry,
+                seed=seed,
+            )
+        return _base_estimator(cfg, prob, backend, seed)
+
+    estimator: EnergyEstimator
+    if mitigation.zne is not None:
+        estimator = ZneEnergy(problem, inner, mitigation.zne.scales, mitigation.zne.extrapolation)
+    else:
+        estimator = inner(problem)
+    if mitigation.rescale is not None:
+        if twin is None:
+            msg = "mitigation.rescale needs twin parameters and their noise-free energy"
+            raise ValueError(msg)
+        twin_params, twin_energy = twin
+        estimator = TwinRescaledEnergy(
+            estimator,
+            twin_params,
+            twin_energy,
+            twin_shots=mitigation.rescale.shots or cfg.final_shots or cfg.shots,
+        )
+    return estimator

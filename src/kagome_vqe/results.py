@@ -42,6 +42,7 @@ __all__ = [
     "new_run_dir",
     "save_run",
     "write_benchmark_summary",
+    "write_evaluation_summary",
 ]
 
 log = logging.getLogger(__name__)
@@ -298,3 +299,32 @@ def _aggregate_table(runs: list[LoadedRun]) -> str:
             f"{100 * np.nanmean(ideal_err):.3f} % | {nfev:.0f} | {shots:,.0f} |"
         )
     return "\n".join(lines) + "\n"
+
+
+def write_evaluation_summary(summaries: list[dict[str, Any]], out_dir: Path) -> tuple[Path, Path]:
+    """Write ``evaluation.json`` and ``evaluation.md`` for fixed-point (mitigation) studies.
+
+    Each summary is :meth:`kagome_vqe.vqe.FixedPointResult.summary`. The table shows the bias
+    of the mean against the noise-free energy and the real spread between repeats; values that
+    lie significantly below the exact ground energy are flagged, since by the variational
+    principle they are artefacts.
+    """
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    json_path = out_dir / "evaluation.json"
+    json_path.write_text(json.dumps(summaries, indent=2, default=str) + "\n")
+    header = (
+        "| run | ansatz | mitigation | noise-free E | mean E | spread | bias | rel. bias "
+        "| shots per energy | setup shots | below ground? |\n"
+        "|---|---|---|---|---|---|---|---|---|---|---|\n"
+    )
+    body = "".join(
+        f"| {r['name']} | {r['ansatz']} | {r['mitigation']} | {r['ideal_energy']:.4f} | "
+        f"{r['mean']:.4f} | {r['spread']:.4f} | {r['bias']:+.4f} | "
+        f"{100 * r['relative_bias']:.2f} % | {r['shots_per_evaluation']:,} | "
+        f"{r['setup_shots']:,} | {'YES' if r['below_ground'] else 'no'} |\n"
+        for r in summaries
+    )
+    md_path = out_dir / "evaluation.md"
+    md_path.write_text(header + body)
+    return json_path, md_path

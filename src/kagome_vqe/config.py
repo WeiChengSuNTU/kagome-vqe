@@ -42,9 +42,12 @@ __all__ = [
     "BenchmarkConfig",
     "ComboConfig",
     "LatticeConfig",
+    "MitigationConfig",
     "OptimizerConfig",
+    "RescaleConfig",
     "RunConfig",
     "Settings",
+    "ZneConfig",
     "apply_overrides",
     "load_benchmark_config",
     "load_run_config",
@@ -290,6 +293,83 @@ class BackendConfig(_Frozen):
         return self.kind if self.name is None else f"{self.kind}:{self.name}"
 
 
+class ZneConfig(_Frozen):
+    """Zero-noise extrapolation settings.
+
+    Attributes:
+        scales: Odd noise-scale factors; each two-qubit gate is applied that many times.
+        extrapolation: ``"exponential"`` (matches multiplicative damping), ``"linear"``,
+            ``"quadratic"`` or ``"richardson"``.
+    """
+
+    scales: list[Annotated[int, Field(ge=1)]] = Field(default_factory=lambda: [1, 3, 5])
+    extrapolation: Literal["linear", "quadratic", "richardson", "exponential"] = "exponential"
+
+    @field_validator("scales")
+    @classmethod
+    def _odd_scales(cls, value: list[int]) -> list[int]:
+        if len(value) < 2 or any(s % 2 == 0 for s in value):
+            msg = "zne.scales needs at least two odd integers"
+            raise ValueError(msg)
+        return value
+
+
+class RescaleConfig(_Frozen):
+    """Twin-circuit rescaling settings.
+
+    Attributes:
+        twin: ``"auto"`` searches multiples of ``pi/4`` for the non-ground twin with the largest
+            noise-free energy; or explicit ansatz parameters.
+        shots: Shots for the one-off twin measurement; ``None`` uses ``backend.final_shots``.
+    """
+
+    twin: Literal["auto"] | list[float] = "auto"
+    shots: Annotated[int, Field(ge=1)] | None = None
+
+
+class MitigationConfig(_Frozen):
+    """Error mitigation, applied in this order: counts-level, then ZNE, then rescaling.
+
+    Attributes:
+        readout: Calibrate per-qubit readout errors and correct every shot.
+        readout_shots: Shots per readout-calibration circuit (two circuits, once per run).
+        symmetry: Keep only shots in the total-spin-singlet sector (``n/2`` ones in every
+            basis). Valid for the RVB and HVA ansatzes only.
+        zne: Zero-noise extrapolation, or ``None``.
+        rescale: Twin-circuit rescaling, or ``None``.
+    """
+
+    readout: bool = False
+    readout_shots: Annotated[int, Field(ge=1)] = 16384
+    symmetry: bool = False
+    zne: ZneConfig | None = None
+    rescale: RescaleConfig | None = None
+
+    @property
+    def enabled(self) -> bool:
+        """Whether any technique is switched on."""
+        return self.readout or self.symmetry or self.zne is not None or self.rescale is not None
+
+    @property
+    def needs_counts(self) -> bool:
+        """Whether shots must be measured directly (readout or symmetry)."""
+        return self.readout or self.symmetry
+
+    def label(self) -> str:
+        """Short name, e.g. ``"readout+symmetry+zne"``; ``"none"`` when disabled."""
+        parts = [
+            name
+            for name, on in (
+                ("readout", self.readout),
+                ("symmetry", self.symmetry),
+                ("zne", self.zne is not None),
+                ("twin", self.rescale is not None),
+            )
+            if on
+        ]
+        return "+".join(parts) or "none"
+
+
 class RunConfig(_Frozen):
     """Everything needed for one reproducible VQE run.
 
@@ -309,6 +389,7 @@ class RunConfig(_Frozen):
             of the current parameters and store it with the cumulative shot count. This
             measures parameter quality independently of noise, which is the fair way to
             compare optimisers on noisy backends. Classical cost; skipped above 20 qubits.
+        mitigation: Error mitigation, see :class:`MitigationConfig`.
     """
 
     name: str = "run"
@@ -321,6 +402,17 @@ class RunConfig(_Frozen):
     output_dir: Path = Path("results")
     record_params: bool = True
     track_ideal_energy: bool = True
+    mitigation: MitigationConfig = MitigationConfig()
+
+    @model_validator(mode="after")
+    def _mitigation_fits(self) -> Self:
+        if self.mitigation.enabled and self.backend.kind == "statevector":
+            msg = "mitigation needs a shot-based backend; statevector energies are exact"
+            raise ValueError(msg)
+        if self.mitigation.symmetry and self.ansatz.type not in ("rvb", "hva"):
+            msg = "symmetry filtering assumes a total-spin singlet ansatz (rvb or hva)"
+            raise ValueError(msg)
+        return self
 
     @field_validator("name")
     @classmethod
@@ -349,9 +441,10 @@ class ComboConfig(_Frozen):
     """
 
     ansatz: AnsatzConfig
-    optimizer: OptimizerConfig
+    optimizer: OptimizerConfig = OptimizerConfig()
     label: str | None = None
     shots: Annotated[int, Field(ge=1)] | None = None
+    mitigation: MitigationConfig | None = None
 
     def name(self) -> str:
         """``label`` or ``"<ansatz>_<optimizer label>"``."""
@@ -388,6 +481,7 @@ class BenchmarkConfig(_Frozen):
     output_dir: Path = Path("results")
     record_params: bool = False
     track_ideal_energy: bool = True
+    mitigation: MitigationConfig = MitigationConfig()
     combos: list[ComboConfig] = Field(default_factory=_paper_combos)
 
     def run_configs(self) -> list[RunConfig]:
@@ -414,6 +508,7 @@ class BenchmarkConfig(_Frozen):
                         output_dir=self.output_dir,
                         record_params=self.record_params,
                         track_ideal_energy=self.track_ideal_energy,
+                        mitigation=combo.mitigation or self.mitigation,
                     )
                 )
         return runs

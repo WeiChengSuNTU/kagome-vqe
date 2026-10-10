@@ -10,14 +10,14 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from qiskit.circuit import QuantumCircuit
 from qiskit.providers import BackendV2
 from qiskit.quantum_info import SparsePauliOp
 from qiskit.transpiler import generate_preset_pass_manager
 
-__all__ = ["IsaProblem", "compile_for_backend"]
+__all__ = ["IsaProblem", "compile_for_backend", "fold_two_qubit_gates"]
 
 log = logging.getLogger(__name__)
 
@@ -35,6 +35,8 @@ class IsaProblem:
         gate_counts: ``circuit.count_ops()`` as a plain dict.
         depth: Circuit depth.
         two_qubit_gates: Number of two-qubit gates (the dominant noise source).
+        logical_observable: The Hamiltonian on the ansatz (logical) qubits, before layout.
+            Counts-level estimators use it with ``physical_qubits`` to decide what to measure.
     """
 
     circuit: QuantumCircuit
@@ -45,6 +47,26 @@ class IsaProblem:
     gate_counts: dict[str, int] = field(default_factory=dict)
     depth: int = 0
     two_qubit_gates: int = 0
+    logical_observable: SparsePauliOp | None = None
+
+    @property
+    def measurement_qubits(self) -> tuple[int, ...]:
+        """Physical qubit hosting each logical qubit (identity for logical problems)."""
+        if self.physical_qubits is not None:
+            return self.physical_qubits
+        n = (
+            self.observable.num_qubits
+            if self.logical_observable is None
+            else self.logical_observable.num_qubits
+        )
+        return tuple(range(n))
+
+    def with_circuit(self, circuit: QuantumCircuit) -> IsaProblem:
+        """Same problem with a different circuit on the same qubits (e.g. noise-folded)."""
+        counts, depth, two_q = _describe(circuit)
+        return replace(
+            self, circuit=circuit, gate_counts=counts, depth=depth, two_qubit_gates=two_q
+        )
 
     @property
     def measurement_groups(self) -> int:
@@ -110,6 +132,7 @@ def compile_for_backend(
             gate_counts=counts,
             depth=depth,
             two_qubit_gates=two_q,
+            logical_observable=observable,
         )
 
     pass_manager = generate_preset_pass_manager(
@@ -140,4 +163,35 @@ def compile_for_backend(
         gate_counts=counts,
         depth=depth,
         two_qubit_gates=two_q,
+        logical_observable=observable,
     )
+
+
+def fold_two_qubit_gates(circuit: QuantumCircuit, scale: int) -> QuantumCircuit:
+    """Amplify two-qubit noise by local folding: two-qubit ``G`` becomes ``G (G^dag G)^k``.
+
+    With ``scale = 2k + 1`` the circuit implements the same unitary but each two-qubit gate is
+    applied ``scale`` times, so its error is amplified roughly ``scale``-fold. Single-qubit
+    gates are left alone: two-qubit gates dominate the noise. The folded circuit must not be
+    re-optimised, or the transpiler would cancel the inserted pairs.
+
+    Args:
+        circuit: An ISA circuit.
+        scale: Odd noise-scale factor, 1 returns a copy.
+
+    Raises:
+        ValueError: If ``scale`` is not a positive odd integer.
+    """
+    if scale < 1 or scale % 2 == 0:
+        msg = f"fold scale must be a positive odd integer, got {scale}"
+        raise ValueError(msg)
+    folded = circuit.copy_empty_like()
+    pairs = (scale - 1) // 2
+    for inst in circuit.data:
+        folded.append(inst.operation, inst.qubits, inst.clbits)
+        if inst.operation.num_qubits == 2 and inst.operation.name not in ("barrier", "measure"):
+            inverse = inst.operation.inverse()
+            for _ in range(pairs):
+                folded.append(inverse, inst.qubits, inst.clbits)
+                folded.append(inst.operation, inst.qubits, inst.clbits)
+    return folded

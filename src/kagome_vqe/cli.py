@@ -206,6 +206,15 @@ def benchmark(
     set_: SetOption = None,
     backend_override: BackendOverride = None,
     dry_run: Annotated[bool, typer.Option("--dry-run", help="Report the plan only.")] = False,
+    point: Annotated[
+        float | None,
+        typer.Option(
+            "--point",
+            help="Evaluate every combo at fixed parameters (all equal to this value) instead of "
+            "optimising; reports bias against the noise-free energy and spread between repeats.",
+        ),
+    ] = None,
+    repeats: Annotated[int, typer.Option(help="Repeats per combo with --point.")] = 10,
     verbose: Verbose = False,
 ) -> None:
     """Run every (ansatz, optimiser) combo of CONFIG on one backend and tabulate."""
@@ -214,6 +223,9 @@ def benchmark(
 
     configure_logging(logging.DEBUG if verbose else logging.INFO)
     bench = BenchmarkConfig.model_validate(_load(config, set_, backend_override))
+    if point is not None:
+        _evaluate_benchmark(bench, point, repeats)
+        return
     run_dirs: list[Path] = []
     for cfg in bench.run_configs():
         console.rule(cfg.name)
@@ -237,6 +249,30 @@ def benchmark(
     console.print(f"summary: {json_path}\nfigure:  {fig_path}")
     if has_ideal is not None:
         console.print(f"figure:  {ideal_path}")
+
+
+def _evaluate_benchmark(bench: BenchmarkConfig, point: float, repeats: int) -> None:
+    from kagome_vqe.results import write_evaluation_summary
+    from kagome_vqe.vqe import evaluate_fixed
+
+    summaries = []
+    for cfg in bench.run_configs():
+        console.rule(f"{cfg.name} at {point}")
+        result = evaluate_fixed(cfg, point, repeats=repeats)
+        summaries.append(result.summary())
+        log.info(
+            "%s: mean %.4f, spread %.4f, noise-free %.4f, bias %+.4f",
+            cfg.name,
+            result.mean,
+            result.spread,
+            result.ideal_energy,
+            result.bias,
+        )
+    tag = f"{point:g}".replace(".", "p").replace("-", "m")
+    out_dir = Path(bench.output_dir) / f"{bench.name}-evaluation-{tag}"
+    json_path, md_path = write_evaluation_summary(summaries, out_dir)
+    console.print(md_path.read_text())
+    console.print(f"summary: {json_path}")
 
 
 # -- plot -------------------------------------------------------------------------------------

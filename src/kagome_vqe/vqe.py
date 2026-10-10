@@ -32,10 +32,12 @@ from kagome_vqe.transpile import IsaProblem, compile_for_backend
 __all__ = [
     "IDEAL_TRACKING_MAX_QUBITS",
     "EnergyObjective",
+    "FixedPointResult",
     "IdealPoint",
     "Prepared",
     "TraceRow",
     "VQERunResult",
+    "evaluate_fixed",
     "prepare",
     "run_vqe",
 ]
@@ -187,6 +189,8 @@ class Prepared:
         projected_evaluations: Objective evaluations the optimiser will use, if predictable.
         parameter_map: Map from ansatz parameters to the compiled circuit's parameters. The
             identity unless parameter shift required one parameter per gate occurrence.
+        twin: Twin for rescaling mitigation as ``(ansatz parameters, noise-free energy)``, or
+            ``None`` when rescaling is off.
     """
 
     config: RunConfig
@@ -198,6 +202,14 @@ class Prepared:
     exact_spectrum: FloatArray
     projected_evaluations: int | None
     parameter_map: ParameterMap = field(default_factory=lambda: ParameterMap.identity(0))
+    twin: tuple[FloatArray, float] | None = None
+
+    @property
+    def circuit_twin(self) -> tuple[FloatArray, float] | None:
+        """The twin with its parameters expanded to circuit-parameter space."""
+        if self.twin is None:
+            return None
+        return self.parameter_map.expand(self.twin[0]), self.twin[1]
 
     @property
     def exact_energy(self) -> float:
@@ -224,6 +236,10 @@ class Prepared:
             },
             "optimizer": self.config.optimizer.model_dump(),
             "backend": self.config.backend.label(),
+            "mitigation": self.config.mitigation.label(),
+            "twin": None
+            if self.twin is None
+            else {"params": self.twin[0].tolist(), "ideal_energy": self.twin[1]},
             "isa": self.problem.stats(),
             "projected_evaluations": self.projected_evaluations,
         }
@@ -377,7 +393,48 @@ def prepare(cfg: RunConfig, *, settings: Settings | None = None) -> Prepared:
         exact_spectrum=spectrum,
         projected_evaluations=projected,
         parameter_map=parameter_map,
+        twin=_twin(cfg, ansatz, hamiltonian, float(spectrum[0])),
     )
+
+
+def _twin(
+    cfg: RunConfig, ansatz: Ansatz, hamiltonian: SparsePauliOp, exact: float
+) -> tuple[FloatArray, float] | None:
+    """Twin parameters (ansatz space) and their noise-free energy, if rescaling is on."""
+    rescale = cfg.mitigation.rescale
+    if rescale is None:
+        return None
+    from kagome_vqe.mitigation import choose_twin
+
+    circuit = ansatz.build()
+    if rescale.twin == "auto":
+        return choose_twin(circuit, hamiltonian, exact, rng=np.random.default_rng(cfg.seed))
+    theta = np.asarray(rescale.twin, dtype=float)
+    if theta.size != ansatz.num_parameters:
+        msg = f"rescale.twin has {theta.size} values, the ansatz {ansatz.num_parameters}"
+        raise ValueError(msg)
+    with StatevectorEnergy(compile_for_backend(circuit, hamiltonian, None)) as est:
+        return theta, float(est.evaluate(theta[None, :]).energies[0])
+
+
+def _shot_cost(cfg: RunConfig, groups: int, measured_shots: int) -> int:
+    """Circuit shots including mitigation overheads.
+
+    ``measured_shots`` is the sum of per-basis shots over every energy requested. ZNE runs each
+    energy once per scale factor; readout calibration costs two circuits per inner estimator
+    (one per scale factor); the rescaling twin is measured once.
+    """
+    if cfg.backend.is_exact:
+        return 0
+    m = cfg.mitigation
+    scales = len(m.zne.scales) if m.zne is not None else 1
+    total = scales * groups * measured_shots
+    if m.readout:
+        total += scales * 2 * m.readout_shots
+    if m.rescale is not None:
+        twin_shots = m.rescale.shots or cfg.backend.final_shots or cfg.backend.shots or 0
+        total += scales * groups * twin_shots
+    return int(total)
 
 
 def _ideal_energy_fn(prep: Prepared) -> Callable[[FloatArray], float] | None:
@@ -420,7 +477,14 @@ def run_vqe(
     ideal_trace: list[IdealPoint] = []
 
     start = time.perf_counter()
-    with make_estimator(cfg.backend, prep.problem, prep.backend, seed=cfg.seed) as estimator:
+    with make_estimator(
+        cfg.backend,
+        prep.problem,
+        prep.backend,
+        seed=cfg.seed,
+        mitigation=cfg.mitigation,
+        twin=prep.circuit_twin,
+    ) as estimator:
         objective = EnergyObjective(
             estimator, record_params=cfg.record_params, parameter_map=prep.parameter_map
         )
@@ -430,7 +494,10 @@ def run_vqe(
             if ideal is not None:
                 ideal_trace.append(
                     IdealPoint(
-                        info.nit, objective.nfev, groups * objective.shots_spent, ideal(info.x)
+                        info.nit,
+                        objective.nfev,
+                        _shot_cost(cfg, groups, objective.shots_spent),
+                        ideal(info.x),
                     )
                 )
 
@@ -452,7 +519,7 @@ def run_vqe(
         description = estimator.description
     elapsed = time.perf_counter() - start
 
-    total_shots = groups * (sum(row.shots or 0 for row in objective.trace) + (final.shots or 0))
+    total_shots = _shot_cost(cfg, groups, objective.shots_spent + (final.shots or 0))
 
     best = objective.best
     best_energy = opt.fun if best is None else min(opt.fun, best.energy)
@@ -488,3 +555,149 @@ def run_vqe(
         elapsed,
     )
     return result
+
+
+@dataclass(slots=True)
+class FixedPointResult:
+    """Repeated energy estimates at one fixed parameter point (no optimisation).
+
+    Used to measure what a backend and mitigation stack reports for a state whose noise-free
+    energy is known: the bias of the mean and the spread between repeats.
+
+    Attributes:
+        config: Run configuration (backend and mitigation).
+        point: Ansatz parameters evaluated.
+        ideal_energy: Noise-free energy at ``point``.
+        exact_energy: Ground-state energy of the lattice.
+        energies: One estimate per repeat, each with a fresh simulator seed.
+        stds: Standard error each estimate reported.
+        shots_per_evaluation: Circuit shots one estimate costs (all bases and scale factors).
+        setup_shots: One-off shots (readout calibration, twin measurement).
+        description: Estimator description, including calibration and twin details.
+        wall_time_s: Total time.
+    """
+
+    config: RunConfig
+    point: FloatArray
+    ideal_energy: float
+    exact_energy: float
+    energies: FloatArray
+    stds: FloatArray
+    shots_per_evaluation: int
+    setup_shots: int
+    description: dict[str, Any]
+    wall_time_s: float
+
+    @property
+    def mean(self) -> float:
+        """Mean estimate over repeats."""
+        return float(self.energies.mean())
+
+    @property
+    def spread(self) -> float:
+        """Sample standard deviation between repeats (the real statistical error)."""
+        return float(self.energies.std(ddof=1)) if self.energies.size > 1 else 0.0
+
+    @property
+    def bias(self) -> float:
+        """``mean - ideal_energy``: negative means the method overshoots below the truth."""
+        return self.mean - self.ideal_energy
+
+    @property
+    def relative_bias(self) -> float:
+        """``|bias| / |ideal_energy|``."""
+        return abs(self.bias) / abs(self.ideal_energy)
+
+    @property
+    def below_ground(self) -> bool:
+        """Whether the mean lies significantly below the exact ground energy.
+
+        Significant means more than two standard errors of the mean. By the variational principle
+        such a value is an artefact of the method, not a better answer.
+        """
+        sem = self.spread / np.sqrt(max(self.energies.size, 1))
+        return self.mean < self.exact_energy - 2 * sem
+
+    def summary(self) -> dict[str, Any]:
+        """JSON-friendly summary."""
+        return {
+            "name": self.config.name,
+            "ansatz": self.config.ansatz.type,
+            "mitigation": self.config.mitigation.label(),
+            "backend": self.config.backend.label(),
+            "point": self.point.tolist(),
+            "ideal_energy": self.ideal_energy,
+            "exact_energy": self.exact_energy,
+            "mean": self.mean,
+            "spread": self.spread,
+            "bias": self.bias,
+            "relative_bias": self.relative_bias,
+            "below_ground": self.below_ground,
+            "repeats": int(self.energies.size),
+            "energies": self.energies.tolist(),
+            "reported_stds": self.stds.tolist(),
+            "shots_per_evaluation": self.shots_per_evaluation,
+            "setup_shots": self.setup_shots,
+            "wall_time_s": self.wall_time_s,
+            "estimator": self.description,
+        }
+
+
+def evaluate_fixed(
+    cfg: RunConfig,
+    point: float | FloatArray,
+    *,
+    repeats: int = 10,
+    prepared: Prepared | None = None,
+    settings: Settings | None = None,
+) -> FixedPointResult:
+    """Estimate the energy at a fixed point ``repeats`` times through the configured stack.
+
+    Args:
+        cfg: Run configuration; the optimiser settings are ignored.
+        point: Ansatz parameters, or one value used for every parameter.
+        repeats: Independent estimates, each with a fresh simulator seed.
+        prepared: Output of :func:`prepare`, if available.
+        settings: IBM credentials for ``backend.kind == "ibm"``.
+    """
+    prep = prepared or prepare(cfg, settings=settings)
+    n = prep.ansatz.num_parameters
+    theta = (
+        np.full(n, float(point))
+        if np.ndim(point) == 0
+        else np.asarray(point, dtype=float).reshape(n)
+    )
+    logical = compile_for_backend(prep.ansatz.build(), prep.hamiltonian, None)
+    with StatevectorEnergy(logical) as sv:
+        ideal = float(sv.evaluate(theta[None, :]).energies[0])
+    groups = 0 if cfg.backend.is_exact else prep.problem.measurement_groups
+    start = time.perf_counter()
+    energies, stds = [], []
+    with make_estimator(
+        cfg.backend,
+        prep.problem,
+        prep.backend,
+        seed=cfg.seed,
+        mitigation=cfg.mitigation,
+        twin=prep.circuit_twin,
+    ) as estimator:
+        phi = prep.parameter_map.expand(theta)[None, :]
+        for _ in range(repeats):
+            batch = estimator.evaluate(phi)
+            energies.append(float(batch.energies[0]))
+            stds.append(float(batch.stds[0]))
+        description = estimator.description
+    shots = cfg.backend.shots or 0
+    per_eval = _shot_cost(cfg, groups, shots) - _shot_cost(cfg, groups, 0)
+    return FixedPointResult(
+        config=cfg,
+        point=theta,
+        ideal_energy=ideal,
+        exact_energy=prep.exact_energy,
+        energies=np.asarray(energies),
+        stds=np.asarray(stds),
+        shots_per_evaluation=per_eval,
+        setup_shots=_shot_cost(cfg, groups, 0),
+        description=description,
+        wall_time_s=time.perf_counter() - start,
+    )
