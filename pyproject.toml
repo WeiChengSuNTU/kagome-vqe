@@ -107,6 +107,8 @@ ignore = [
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["D", "ANN", "PLR", "S101", "T20"]
 "src/kagome_vqe/cli.py" = ["T20"]  # the CLI is the one place that talks to stdout
+"docsgen/tests/**" = ["D", "ANN", "PLR", "S101", "T20", "RUF001"]
+"docsgen/**" = ["RUF001", "RUF002"]  # typographic minus signs are deliberate in slide text
 
 [tool.ruff.lint.pydocstyle]
 convention = "google"

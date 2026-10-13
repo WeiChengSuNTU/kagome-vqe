@@ -1,0 +1,135 @@
+% Preamble for the kagome-vqe milestone report.
+% Self-contained: only packages from a standard TeX Live / Overleaf installation.
+% Builds with xelatex, lualatex or pdflatex (+ biber).
+
+%%%%% Engine and fonts %%%%%
+\usepackage{iftex}
+\ifPDFTeX
+  \usepackage[T1]{fontenc}
+  \usepackage{lmodern}
+\else
+  \usepackage{fontspec}
+\fi
+
+%%%%% Page layout %%%%%
+\usepackage[a4paper, margin=2cm, includehead, includefoot, heightrounded]{geometry}
+\usepackage[bottom]{footmisc}
+\usepackage{fancyhdr}
+\pagestyle{fancy}
+\renewcommand{\headrulewidth}{0.4pt}
+\renewcommand{\footrulewidth}{0.4pt}
+\fancyfoot[C]{\thepage}
+% No footer rule on pages that carry footnotes (the footnote rule takes its place).
+\let\origfootrule\footrule
+\renewcommand{\footrule}{\iffootnote{}{\origfootrule}}
+\renewcommand{\footnoterule}{\origfootrule}
+\linespread{1.2}
+\usepackage{enumitem}
+\setlist[enumerate]{itemsep=-1mm}
+\setlist[itemize]{itemsep=-1mm}
+
+%%%%% Mathematics %%%%%
+\usepackage{amsmath, amssymb, amsthm, mathtools}
+\usepackage{physics}  % \ket, \bra, \braket
+\newcommand{\RR}{\mathbb{R}}
+\newcommand{\CC}{\mathbb{C}}
+
+%%%%% Figures, tables, boxes %%%%%
+\usepackage{graphicx}
+\usepackage{float}
+\usepackage{caption}
+\usepackage{subcaption}
+\usepackage[export]{adjustbox}
+\usepackage{array, booktabs, makecell}
+\newcolumntype{L}[1]{>{\raggedright\arraybackslash}p{#1}}
+\usepackage{xcolor}
+\usepackage[breakable, skins]{tcolorbox}
+\usepackage{quantikz}
+
+%%%%% Bibliography and links %%%%%
+\usepackage[backend=biber, style=phys, articletitle=false, biblabel=brackets,
+  chaptertitle=false, pageranges=false]{biblatex}
+\usepackage{xurl}
+\usepackage{hyperref}
+\hypersetup{colorlinks=true, linkcolor=blue, filecolor=magenta, urlcolor=cyan}
+\urlstyle{same}
+
+%%%%% Theorem-like environments %%%%%
+% \begin{thm} ... \end{thm}, with two optional switches before the title:
+%   *  start the body on a new line;   !  draw the statement in a blue box.
+% e.g. \begin{thm}*![Exact dimer ground state]. Theorems, lemmas, propositions and
+% corollaries share one counter, as do exercises and problems.
+\theoremstyle{definition}
+\tcbset{kvthmbox/.style={breakable, enhanced, colback=blue!5!white,
+  colframe=blue!75!black, fonttitle=\bfseries}}
+\makeatletter
+% \kvnewtheorem[<shared env>]{<env>}{<Name>}; the starred form numbers globally.
+\NewDocumentCommand{\kvnewtheorem}{s o m m}{%
+  \IfNoValueTF{#2}
+    {\IfBooleanTF{#1}{\newtheorem{#3plain}{#4}}{\newtheorem{#3plain}{#4}[section]}%
+     \expandafter\def\csname kv@ctr@#3\endcsname{#3plain}}
+    {\newtheorem{#3plain}[#2plain]{#4}%
+     \expandafter\def\csname kv@ctr@#3\endcsname{#2plain}}%
+  \NewDocumentEnvironment{#3}{t* t! o}
+    {\IfBooleanTF{##2}
+      {\refstepcounter{\csname kv@ctr@#3\endcsname}%
+       \begin{tcolorbox}[kvthmbox, title={#4~\csname the\csname kv@ctr@#3\endcsname
+         \endcsname\IfNoValueF{##3}{ (##3)}}]}
+      {\IfNoValueTF{##3}{\begin{#3plain}}{\begin{#3plain}[##3]}}%
+     \IfBooleanT{##1}{\leavevmode\par}}
+    {\IfBooleanTF{##2}{\end{tcolorbox}}{\end{#3plain}}}%
+}
+\makeatother
+\kvnewtheorem{thm}{Theorem}
+\kvnewtheorem[thm]{lem}{Lemma}
+\kvnewtheorem[thm]{prop}{Proposition}
+\kvnewtheorem[thm]{cor}{Corollary}
+\kvnewtheorem{dfn}{Definition}
+\kvnewtheorem{exmp}{Example}
+\kvnewtheorem{rem}{Remark}
+\kvnewtheorem{exer}{Exercise}
+\kvnewtheorem[exer]{prob}{Problem}
+\kvnewtheorem{sol}{Solution}
+\kvnewtheorem*{ntn}{Notation}
+
+%%%%% Document metadata %%%%%
+\title{\texttt{kagome-vqe}: milestone report\\[0.3em]
+  \large Variational ground state of the 12-site kagome Heisenberg star}
+\author{kagome-vqe group}
+\date{Updated \today{} \quad (through milestone M2)}
+\hypersetup{pdftitle={kagome-vqe: milestone report}, pdfauthor={kagome-vqe group}}
+
+\fancyhead[L]{kagome-vqe milestone report}
+\fancyhead[R]{\nouppercase{\leftmark}}
+
+\graphicspath{{figures/}}
+\addbibresource{bibliography.bib}
+
+% Generated numbers: \V<key> macros, see docsgen/numbers.py
+\input{tables/numbers}
+
+% Notation
+\newcommand{\SWAP}{\mathrm{SWAP}}
+\newcommand{\eSWAP}{\mathrm{eSWAP}}
+\newcommand{\Hev}{H_{\mathrm{even}}}
+\newcommand{\Hod}{H_{\mathrm{odd}}}
+\newcommand{\sing}{\ket{s}}
+\newcommand{\py}[1]{\texttt{\detokenize{#1}}}
+
+% \cref{prefix:name}: "Theorem 3" etc. from the label prefix (cleveref does not see the
+% shared theorem counters, so the name comes from our label convention instead).
+\ExplSyntaxOn
+\seq_new:N \l__kv_prefix_seq
+\NewDocumentCommand{\cref}{m}
+  {
+    \regex_extract_once:nnN { \A[a-z]+ } {#1} \l__kv_prefix_seq
+    \str_case_e:nnF { \seq_item:Nn \l__kv_prefix_seq {1} }
+      {
+        {thm}{Theorem} {lem}{Lemma} {prop}{Proposition} {cor}{Corollary}
+        {dfn}{Definition} {rem}{Remark} {sec}{Section} {fig}{Figure} {tab}{Table}
+        {exer}{Exercise} {eq}{Equation} {app}{Appendix} {alg}{Algorithm}
+      } { }
+    \nobreakspace\ref{#1}
+  }
+\NewCommandCopy{\Cref}{\cref}
+\ExplSyntaxOff

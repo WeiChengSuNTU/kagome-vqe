@@ -1,0 +1,708 @@
+\section{Milestone M2: error mitigation}
+\label{sec:m2}
+
+\begin{tcolorbox}[colback=gray!5, colframe=gray!40, title={M2 at a glance}, fonttitle=\bfseries]
+  \textbf{Question.} How much of the noise bias can mitigation remove?\quad
+  \textbf{Answer.} Correct readout, then filter by total spin, then rescale by a twin circuit.
+  On \py{FakeGuadalupeV2} this takes the bias from \VMbHvaFullZeroRawRel{} to
+  \VMbRoSymTwinMin{}--\VMbRoSymTwinMax{} (sampled, always positive) wherever there is gate noise,
+  and to zero within error with readout noise alone. In the infinite-shot limit it converges to
+  \VMxTwMin{}--\VMxTwMax{} under gate noise and to zero under readout noise. The cost is no
+  extra shots per energy and \VMbSetupRoSymTwin{} one-off shots. The first stack chosen
+  (filter first, then correct) looked as accurate, but only through a cancellation, and was
+  withdrawn (\cref{sec:m2cancel}).\\
+  \textbf{Code.} \texttt{c9272e3} (layers), \texttt{56aadd3} (correct, then filter),
+  \texttt{c9bb4dd} (revised conclusion), \texttt{2116da4} (fresh set-up per repeat),
+  \texttt{ccb4c09} (final reruns). \textbf{Results.} \py{results/m2c-*},
+  \py{results/m2b_vqe-summary}; earlier \py{results/m2b-*}, \py{results/m2-*}.
+  \textbf{Status.} \emph{Done}; H1 skipped.
+\end{tcolorbox}
+
+\subsection{Goal and exit criteria}
+
+After M0 the noisy energy is an honest estimate, but it sits \VMtHvaZeroRawRel{} above the truth at
+the exact parameters (\cref{sec:noise}). An optimiser cannot remove that bias
+(\cref{prop:mixed}); mitigation can try. M2 implemented four techniques as composable estimator
+layers, measured each combination at \emph{fixed} parameters where the noise-free energy is
+known, and chose a stack for full optimisations and later hardware runs. Exit: a measured bias
+and shot cost for every stack, and a chosen stack. The milestone closed twice. The first choice
+was withdrawn after this report found the cancellation of \cref{sec:m2cancel}; the second was
+validated against one error source at a time (\cref{sec:m2sources}).
+
+\subsection{Theory}
+
+All four techniques act on the energy estimator, not on the circuit's parameters. Two of them
+need the individual shots, so they replace the Estimator primitive with a sampler that measures
+the \VMeasGroups{} bases itself. Since every term of $H$ is $X_iX_j$, $Y_iY_j$ or $Z_iZ_j$, the
+three qubit-wise commuting groups are the uniform bases: all qubits measured in $X$, all in $Y$,
+or all in $Z$.
+
+\begin{ntn}
+  For one basis, a shot is a bit string $b\in\{0,1\}^{n}$, $n=\VNumSites$, and the noise-free
+  outcome distribution is $p(b)$. Qubit $q$'s readout flips $0\to1$ with probability $e_0^{(q)}$
+  and $1\to0$ with probability $e_1^{(q)}$, independently of the other qubits; its confusion
+  matrix is
+  $A_q=\bigl(\begin{smallmatrix}1-e_0^{(q)} & e_1^{(q)}\\ e_0^{(q)} & 1-e_1^{(q)}\end{smallmatrix}\bigr)$,
+  with columns indexed by the prepared bit and rows by the read bit. A Pauli term $P_t$ of the
+  measured basis acts on the support $S_t$, and $s(b)=(-1)^{b}$ is the eigenvalue of bit $b$.
+\end{ntn}
+
+\begin{dfn}[Counts-level energy estimator]\label{dfn:counts}
+  Given weights $w_q\colon\{0,1\}\to\RR$, a shot $b$ contributes
+  $\varepsilon(b)=\sum_t c_t\prod_{q\in S_t}w_q(b_q)$ and the energy estimate is the mean of
+  $\varepsilon$ over the shots, summed over the three bases. Without readout correction
+  $w_q=s$. With readout correction $w_q=v_q$, where $v_q=(1,-1)\,A_q^{-1}$, that is
+  \[
+    v_q(0)=\frac{1-e_1^{(q)}+e_0^{(q)}}{1-e_0^{(q)}-e_1^{(q)}},\qquad
+    v_q(1)=-\frac{1+e_1^{(q)}-e_0^{(q)}}{1-e_0^{(q)}-e_1^{(q)}} .
+  \]
+  \emph{Symmetry filtering} discards every shot whose Hamming weight $|b|$ differs from $n/2$
+  before the mean is taken.
+\end{dfn}
+
+Because $\varepsilon$ is computed per shot, the standard error of the mean is the exact one,
+$\operatorname{std}(\varepsilon)/\sqrt{\text{shots}}$, instead of the primitive's upper bound
+of \cref{rem:stdbound}. (The estimator of \cref{dfn:ctf} below is not a per-shot mean; its
+error comes from a bootstrap.)
+
+\begin{prop}[Readout correction is unbiased]\label{prop:readout}
+  If the readout errors are independent with confusion matrices $A_q$ and the $v_q$ use the same
+  $A_q$, then for every Pauli term $\mathbb E\bigl[\prod_{q\in S_t}v_q(\tilde b_q)\bigr]=\langle P_t\rangle$,
+  where $\tilde b$ is the read string and $\langle P_t\rangle$ the noise-free expectation.
+\end{prop}
+
+\begin{proof}
+  Condition on the prepared string $b$. The read bits are independent with
+  $\Pr(\tilde b_q=r\mid b_q)=(A_q)_{r b_q}$, so
+  $\mathbb E[v_q(\tilde b_q)\mid b_q]=\sum_r v_q(r)(A_q)_{r b_q}=\bigl((1,-1)A_q^{-1}A_q\bigr)_{b_q}=s(b_q)$.
+  Independence turns the expectation of the product over $S_t$ into the product of these
+  conditional means, $\prod_{q\in S_t}s(b_q)$, which is the eigenvalue of $P_t$ on $b$. Averaging
+  over $b\sim p$ gives $\langle P_t\rangle$.
+\end{proof}
+
+The price is variance: $|v_q|\approx1/(1-2e)$, so each two-body term's per-shot magnitude grows
+by about $1/(1-2e)^2$. With the calibrated mean flip probability $e=\VMtReadoutErr$ (largest
+\VMtReadoutErrMax) this is under $10\,\%$.
+
+\begin{prop}[Ring-ansatz states lie in the zero-magnetisation sector of every basis]\label{prop:sector}
+  For every parameter value, the RVB and HVA states $\ket{\psi(\theta)}$ of \cref{dfn:ansatz}
+  are total-spin singlets, $\vec S_{\mathrm{tot}}^{\,2}\ket{\psi(\theta)}=0$ with
+  $\vec S_{\mathrm{tot}}=\sum_i\vec\sigma_i/2$. Consequently, in each uniform basis $X$, $Y$ or
+  $Z$, a noise-free shot has exactly $n/2$ ones.
+\end{prop}
+
+\begin{proof}
+  The initial state is a product of singlets (\cref{dfn:singlet}), each with total spin $0$, so
+  the product has $\vec S_{\mathrm{tot}}^{\,2}=0$. Every later gate is generated by
+  $\SWAP_{ij}=\tfrac12(I+X_iX_j+Y_iY_j+Z_iZ_j)$ or by $h_{ij}$, both functions of
+  $\vec\sigma_i\cdot\vec\sigma_j$, which commutes with every component of $\vec S_{\mathrm{tot}}$.
+  Hence each gate commutes with $\vec S_{\mathrm{tot}}^{\,2}$ and the state stays a singlet.
+  Now $0=\bra\psi\vec S_{\mathrm{tot}}^{\,2}\ket\psi=\sum_{\alpha}\lVert S^\alpha_{\mathrm{tot}}\ket\psi\rVert^2$,
+  so $S^\alpha_{\mathrm{tot}}\ket\psi=0$ for $\alpha=x,y,z$. Measuring every qubit in basis
+  $\alpha$ measures the $\sigma^\alpha_i$, and $S^\alpha_{\mathrm{tot}}=\tfrac12(n-2|b|)$ on outcome
+  $b$; only $|b|=n/2$ has nonzero amplitude.
+\end{proof}
+
+A shot of any other weight was corrupted by noise and can be discarded \parencite{bonetmonroig2018,mcardle2019}.
+This is not free: the filter keeps only about \VMtKept{} of the shots under full device noise,
+so the shot noise per energy grows by about $\sqrt2$. It also only detects errors that change
+the weight; an error that maps the state to another weight-$n/2$ string passes.
+
+Combining the two layers needs care, because filtering changes the distribution that the
+calibration describes (\cref{sec:m2cancel}). The consistent order is the reverse.
+
+\begin{dfn}[Correct, then filter]\label{dfn:ctf}
+  Let $\tilde p$ be the read distribution of one basis and $A=\bigotimes_q A_q$ the calibrated
+  readout channel. Form the quasi-probability vector $\hat p=A^{-1}\tilde p$, set every entry with
+  $|b|\ne n/2$ to zero, divide by the remaining total weight $\sum_{|b|=n/2}\hat p(b)$ (the
+  \emph{kept quasi-weight}), and evaluate $\sum_t c_t\,\langle P_t\rangle$ on the result with
+  $w_q=s$.
+\end{dfn}
+
+\begin{prop}[Correct, then filter removes readout error exactly]\label{prop:ctf}
+  Let $q$ be the outcome distribution of one basis \emph{before} readout, so that
+  $\tilde p=Aq$, and let the calibration be exact. Then the estimator of \cref{dfn:ctf} equals
+  the symmetry-filtered energy of $q$. In particular, if the only noise is readout error, it
+  returns the noise-free energy.
+\end{prop}
+
+\begin{proof}
+  $A$ is invertible when every $e_0^{(q)}+e_1^{(q)}<1$, and $A^{-1}\tilde p=A^{-1}Aq=q$. The
+  remaining steps of \cref{dfn:ctf} are exactly symmetry filtering (\cref{dfn:counts}) applied
+  to $q$. If readout is the only noise, $q=p$, which is supported on $|b|=n/2$ by
+  \cref{prop:sector}; filtering leaves it unchanged, the kept weight is $1$, and the energy is
+  the noise-free one.
+\end{proof}
+
+So under full noise this estimator sees only the gate noise, minus whatever the filter removes:
+the exact computation of \cref{sec:m2cancel} gives \VMxHvaZeroFullCtf{} for HVA at $\theta=0$
+with full noise and \VMxHvaZeroGtCtf{} with gate noise alone, equal to machine precision. With a finite calibration and finite shots,
+$\hat p$ has negative entries and the kept weight fluctuates, so the variance is larger than
+for filtering alone. The inversion acts on all $2^n$ outcomes, which limits it to about 20
+qubits.
+
+\begin{dfn}[Zero-noise extrapolation by local folding]\label{dfn:zne}
+  For an odd scale $\lambda=2k+1$, replace every two-qubit gate $G$ of the transpiled circuit by
+  $G(G^\dagger G)^k$ \parencite{giurgicatiron2020}. The unitary is unchanged and the two-qubit
+  error is amplified roughly $\lambda$-fold. Measure $E(\lambda)$ at $\lambda=1,3,5$ and fit
+  $E(\lambda)=A\,e^{-b\lambda}$ \parencite{endo2018}; report $A=E(0)$.
+\end{dfn}
+
+The exponential model is the one suggested by \cref{prop:depol}: if each folded gate multiplied
+the energy by a fixed factor, $E(\lambda)$ would decay geometrically in $\lambda$. ZNE triples
+the shots per energy.
+
+\begin{dfn}[Twin-circuit rescaling]\label{dfn:twin}
+  Choose \emph{twin} parameters $\theta_{\mathrm{t}}$ whose noise-free energy
+  $E_{\mathrm{ideal}}(\theta_{\mathrm{t}})$ is computable classically, measure the twin once with
+  noise, and report $E_{\mathrm{mit}}(\theta)=E_{\mathrm{noisy}}(\theta)\,
+  E_{\mathrm{ideal}}(\theta_{\mathrm{t}})/E_{\mathrm{noisy}}(\theta_{\mathrm{t}})$
+  \parencite{urbanek2021}. The package picks the twin on a grid of multiples of $\pi/4$ with the
+  largest $|E_{\mathrm{ideal}}|$, excluding ground states so the test is not circular.
+\end{dfn}
+
+\begin{rem}[When rescaling is exact]
+  Under global depolarising noise of the same strength for both circuits, \cref{prop:depol} gives
+  $E_{\mathrm{noisy}}=(1-p)E_{\mathrm{ideal}}$ for target and twin alike, and the ratio cancels
+  $(1-p)$ exactly. Rescaling therefore works to the extent that the damping factor
+  $E_{\mathrm{noisy}}/E_{\mathrm{ideal}}$ is the same for the twin and the target. Nothing
+  guarantees that for real noise, which is neither global nor state-independent.
+\end{rem}
+
+\begin{prop}[Rescaling error]\label{prop:twinerr}
+  Write $D=E_{\mathrm{noisy}}(\theta)/E_{\mathrm{ideal}}(\theta)$ and
+  $D_{\mathrm t}=E_{\mathrm{noisy}}(\theta_{\mathrm t})/E_{\mathrm{ideal}}(\theta_{\mathrm t})$
+  for the damping of target and twin, measured with infinitely many shots. Then twin rescaling
+  has relative bias
+  $\bigl(E_{\mathrm{mit}}-E_{\mathrm{ideal}}\bigr)/|E_{\mathrm{ideal}}|=1-D/D_{\mathrm t}$
+  when $E_{\mathrm{ideal}}(\theta)<0$.
+\end{prop}
+
+\begin{proof}
+  By \cref{dfn:twin},
+  $E_{\mathrm{mit}}=E_{\mathrm{noisy}}(\theta)\,E_{\mathrm{ideal}}(\theta_{\mathrm t})/E_{\mathrm{noisy}}(\theta_{\mathrm t})
+  =D\,E_{\mathrm{ideal}}(\theta)/D_{\mathrm t}$. Subtract $E_{\mathrm{ideal}}(\theta)$ and divide
+  by $|E_{\mathrm{ideal}}(\theta)|=-E_{\mathrm{ideal}}(\theta)$.
+\end{proof}
+
+A twin damped \emph{more} than the target ($D_{\mathrm t}<D$) makes the estimate overshoot
+below the noise-free value; a twin damped less leaves part of the bias.
+
+\subsection{Implementation}
+
+\begin{itemize}
+  \item \textbf{Counts layer} (\py{CountsEnergy} in \py{mitigation/counts.py}): measures the three
+    bases itself, with Qiskit's backend sampler over Aer (fresh seed per call, as in M0) or the runtime
+    \py{SamplerV2}. Readout is calibrated once per estimator by preparing all-zeros and all-ones
+    (2 circuits of 16384 shots). In \texttt{c9272e3}, which produced the first study, shots were
+    \emph{filtered first} and then weighted with $v_q$. Since \texttt{56aadd3} the combination
+    follows \cref{dfn:ctf}, with a bootstrap standard error from 50 resamples of the shots.
+  \item \textbf{Noise switch} (\texttt{56aadd3}): \py{backend.noise} selects \py{full},
+    \py{readout} or \py{gates}, so the same configuration can be evaluated with one error source
+    at a time.
+  \item \textbf{ZNE} (\py{ZneEnergy}): folds the ISA circuit with
+    \py{transpile.fold_two_qubit_gates} once per scale and wraps one inner estimator per scale, so
+    readout calibration is repeated per scale. Only the single-qubit measurement suffix is
+    translated after folding; re-optimising would cancel the inserted $G^\dagger G$ pairs.
+  \item \textbf{Twin} (\py{TwinRescaledEnergy}, \py{choose_twin}): measures the twin once at
+    \VMbTwinShots{} shots per basis when the estimator opens, through the same inner stack, and
+    propagates its uncertainty into the reported standard error. \py{twin = "auto"} searches the
+    $\pi/4$ grid with a statevector, which also limits it to about 20 qubits.
+  \item \textbf{Composition}: \py{make_estimator} builds counts processing innermost, then ZNE,
+    then rescaling, from a \py{[mitigation]} table in the run config.
+  \item \textbf{Evaluation mode}: \py{kagome-vqe benchmark CONFIG --point P --repeats R}
+    estimates the energy $R$ times at all parameters equal to $P$, with fresh seeds, and writes
+    \py{evaluation.json} with the mean, the real spread, the bias against the noise-free energy,
+    the shot cost, the kept fraction and a \py{below_ground} flag for means more than two
+    standard errors below $E_0$. Until \texttt{2116da4} all $R$ repeats shared one estimator,
+    hence one calibration and one twin measurement (the \py{m2b} reruns); since then each repeat
+    builds its own (the \py{m2c} reruns reported below).
+\end{itemize}
+
+\subsection{First study: filter, then correct}
+\label{sec:m2first}
+
+In the first study (\texttt{c9272e3}, filter first), every stack was evaluated \VMtRepeatsZero{} times at two points: the exact parameters
+($\theta=0$, noise-free $-18$) and the generic point $\theta=\VBoundTheta$ for every parameter,
+where the noise-free energies are \VMtIdealHvaPt{} (HVA) and \VMtIdealRvbPt{} (RVB). Each
+energy uses \VMtShots{} circuit shots (4096 per basis), \VMtShotsZne{} with ZNE.
+
+\begin{table}[H]
+  \centering
+  \footnotesize
+  \setlength{\tabcolsep}{4pt}
+  \begin{adjustbox}{max width=\linewidth}
+    \input{tables/m2_stacks}
+  \end{adjustbox}
+  \caption{Mean energy of \VMtRepeatsZero{} repeats per stack, with the relative bias
+    $(\bar E-E_{\mathrm{ideal}})/|E_{\mathrm{ideal}}|$ in brackets; negative means below the
+    noise-free value. $^\dagger$: mean more than two standard errors below $-18$, impossible for
+    a physical state (\cref{prop:mixed}). The spread between repeats is
+    \VMtHvaZeroSymSpread{} to \VMtHvaZeroRoZneSpread{}. One-off shots are the readout
+    calibration (per ZNE scale) and the twin measurement.}
+  \label{tab:m2}
+\end{table}
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=\linewidth]{m2_stacks}
+  \caption{The same data as Table~\ref{tab:m2}. Bars: $\pm2$ standard errors of the mean. The
+    shaded row is the stack first chosen, later withdrawn. Stacks containing both symmetry and
+    ZNE, and the twin stacks for HVA, land far below the noise-free value.}
+  \label{fig:m2stacks}
+\end{figure}
+
+Figure~\ref{fig:m2stacks} sorts the stacks into three groups.
+\begin{itemize}
+  \item \textbf{Single techniques remove part of the bias.} Readout correction alone moves HVA at
+    $\theta=0$ from \VMtHvaZeroRaw{} to \VMtHvaZeroRo, the readout factor of Table~\ref{tab:floor}.
+    Symmetry alone reaches \VMtHvaZeroSym; ZNE alone \VMtHvaZeroZne{} at three times the shots.
+  \item \textbf{Two combinations come close.} Readout + symmetry: \VMtHvaZeroRoSymRel{} (HVA) and
+    \VMtRvbZeroRoSymRel{} (RVB) at $\theta=0$, \VMtHvaPtRoSymRel{} and \VMtRvbPtRoSymRel{} at
+    $\theta=\VBoundTheta$, with no extra shots per energy. Readout + ZNE: \VMtHvaZeroRoZneRel{}
+    and \VMtRvbZeroRoZneRel{}, for any ansatz but at three times the shots.
+  \item \textbf{Three kinds of stack overshoot.} Symmetry + ZNE goes to \VMtHvaZeroRoSymZne{} (HVA) and \VMtRvbZeroRoSymZne{} (RVB); twin
+    rescaling for HVA overshoots by \VMtHvaZeroTwinRel; and readout + symmetry itself is
+    \VMtHvaZeroRoSymBelow{} standard errors below $-18$ for HVA at $\theta=0$.
+\end{itemize}
+
+\paragraph{Why HVA's twin fails without the filter.} HVA's twin is at $(5\pi/4,5\pi/4)$ with
+noise-free energy \VMtTwinIdealHva{} and noisy energy \VMtTwinNoisyHva, a rescaling factor
+\VMtTwinFactorHva. The twin is damped more than the target, so by \cref{prop:twinerr} the
+factor over-corrects (\cref{sec:m2twin} gives the damping factors). RVB's twin (noise-free \VMtTwinIdealRvb, noisy \VMtTwinNoisyRvb, factor
+\VMtTwinFactorRvb) happens to be damped like the target, and rescaling works. The development
+session also notes that on the Clifford grid ($\pi/2$ steps) every HVA point is a ground state
+or has zero energy, so no Clifford twin exists for HVA on this lattice.
+
+\paragraph{Why symmetry and ZNE do not stack.} The development session's explanation:
+post-selection removes noise in a way that is not multiplicative in $\lambda$ (the kept fraction
+itself falls with $\lambda$), so the exponential fit extrapolates a curve that does not have the
+assumed shape. The observed overshoot, \VMtHvaZeroRoSymZneRel{} at $\theta=0$, is consistent with
+that, and the reruns show it with gate noise alone (\VMbHvaGatesPtRoSymZneRel), but this report
+has not checked the mechanism separately.
+
+\subsection{Why readout plus symmetry looks accurate}
+\label{sec:m2cancel}
+
+The development session attributed the small overshoot of readout + symmetry to the calibration
+describing all shots while being applied to the post-selected ones. To test that, and to measure
+how large the effect is, this report computed the \emph{infinite-shot} value of every
+counts-level estimator exactly: the transpiled circuit is simulated as a density matrix, the
+outcome distribution of each basis is read without sampling, the device's readout channel is
+applied analytically, and the estimators of \cref{dfn:counts} are evaluated on that distribution
+(\py{docsgen.physics.mitigation_exact}). The same computation with the full noise model
+reproduces the sampled means of Table~\ref{tab:m2} to within their spread (e.g.\ HVA, $\theta=0$:
+\VMxHvaZeroFullRaw, \VMxHvaZeroFullRo, \VMxHvaZeroFullSym, \VMxHvaZeroFullRoSym).
+
+\begin{prop}[Filtering then correcting over-corrects]\label{prop:overcorrect}
+  Assume independent readout errors with $e_0^{(q)},e_1^{(q)}\le e$, no other noise, and a
+  noise-free distribution supported on $|b|=n/2$. Then the filtered distribution is
+  $p+O(e^2)$, and to leading order the filter-then-correct estimator returns
+  \[
+    E_{\mathrm{ro+sym}}=\sum_t c_t\,\langle P_t\rangle\prod_{q\in S_t}\frac{1}{1-e_0^{(q)}-e_1^{(q)}}
+      \;+\;O\bigl(e^2,\ \max_q|e_0^{(q)}-e_1^{(q)}|\bigr),
+  \]
+  a multiplicative over-correction of each two-body term by about $1/(1-2e)^2$.
+\end{prop}
+
+\begin{proof}[Proof sketch]
+  A single bit flip changes $|b|$ by one, so every read string of weight $n/2$ arises either from
+  no flip, with probability $p(b)\prod_q(1-e^{(q)}_{b_q})$, or from at least two flips, with
+  probability $O(e^2)$. The kept fraction is $\prod_q(1-e_{b_q}^{(q)})+O(e^2)$, and dividing
+  gives $\tilde p=p+O(e^2)$. The filtered shots are therefore already almost free of readout
+  error, but the estimator still applies $v_q$. Writing
+  $v_q(b)=s(b)/(1-e_0^{(q)}-e_1^{(q)})+(e_0^{(q)}-e_1^{(q)})/(1-e_0^{(q)}-e_1^{(q)})$ and taking
+  the product over a two-site support gives
+  $\prod_{q\in S_t}s(b_q)\big/\prod_{q\in S_t}(1-e_0^{(q)}-e_1^{(q)})$ up to the stated
+  corrections. Averaging over $\tilde p$ gives the formula.
+\end{proof}
+
+With the calibrated $e=\VMtReadoutErr$, the predicted factor $1/(1-2e)^2$ is \VMxOverPredicted.
+The exact computation with readout noise only gives $E_{\mathrm{ro+sym}}/E_{\mathrm{sym}}=\VMxOverFactor$:
+readout + symmetry returns \VMxHvaZeroRoRoSym{} (\VMxHvaZeroRoRoSymRel) at the exact HVA
+parameters, where readout correction alone is exact (\VMxHvaZeroRoRo).
+
+\begin{table}[H]
+  \centering
+  \small
+  \begin{adjustbox}{max width=\linewidth}
+    \input{tables/m2_exact}
+  \end{adjustbox}
+  \caption{Infinite-shot energy of each counts-level estimator, with the relative bias in
+    brackets. Readout noise only: the device's readout channel and nothing else. Full noise: gate
+    errors, $T_1/T_2$ and readout. ``Correct, then filter'' inverts the calibrated readout channel
+    on the whole outcome distribution and then projects the resulting quasi-probabilities onto
+    weight $n/2$.}
+  \label{tab:m2exact}
+\end{table}
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=\linewidth]{m2_exact}
+  \caption{Each arrow goes from readout noise only (hollow) to full noise (filled). Readout +
+    symmetry as implemented starts \emph{below} the noise-free value and is pushed back up by gate
+    noise, ending near zero bias by cancellation. Correcting before filtering is exact under
+    readout noise and leaves only the gate noise the filter cannot see.}
+  \label{fig:m2exact}
+\end{figure}
+
+Table~\ref{tab:m2exact} and Figure~\ref{fig:m2exact} separate the two effects.
+\begin{enumerate}
+  \item \textbf{Readout noise alone} gives readout + symmetry an overshoot of
+    \VMxHvaZeroRoRoSymRel{} (HVA, $\theta=0$) and \VMxRvbPtRoRoSymRel{} (RVB,
+    $\theta=\VBoundTheta$), as \cref{prop:overcorrect} predicts.
+  \item \textbf{Gate noise alone} leaves a bias that symmetry filtering cannot
+    remove. The sector-aware estimator, which treats readout consistently, isolates it:
+    \VMxHvaZeroFullCtfRel{} and \VMxRvbPtFullCtfRel.
+  \item \textbf{Under full noise}, to leading order readout + symmetry equals the symmetry-only
+    energy times the over-correction factor: $\VMxOverFactor\times\VMxHvaZeroFullSym=\VMxPredictFull$,
+    against \VMxHvaZeroFullRoSym{} computed. The symmetry-only bias (\VMxHvaZeroFullSymRel) and the
+    over-correction (\VMxOverPct) happen to be nearly equal on this device.
+\end{enumerate}
+
+\begin{rem}[Consequence]
+  The small bias of the chosen stack is a property of \py{FakeGuadalupeV2}'s ratio of readout
+  error to gate error, not of the method. On a device with relatively less gate noise, or after
+  depth compression (M4) removes CX gates, the same stack will move further below the
+  noise-free value. Readings below $-18$ in an optimisation are therefore expected, not
+  accidental. The sector-aware estimator is principled but leaves \VMxHvaZeroFullCtfRel, and it works with
+  quasi-probabilities, so its variance is larger; it was computed here only in the
+  infinite-shot limit.
+\end{rem}
+
+\paragraph{Follow-up on \py{main}.} The development session reproduced both effects
+independently, with sampled runs that switch on one error source at a time. It withdrew the
+chosen stack, changed \py{CountsEnergy} to \cref{dfn:ctf} (\texttt{56aadd3}), added the
+\py{backend.noise} switch, and reran every stack (\cref{sec:m2sources}).
+
+\subsection{Revised study: one error source at a time}
+\label{sec:m2sources}
+
+The reruns (\py{results/m2c-*}) repeat the ten stacks with the corrected estimator,
+\VMbRepeats{} times each, every repeat with its own calibration and twin measurement, under full noise at both points and, at $\theta=\VBoundTheta$, with
+readout noise only and with gate noise only. A method that is right for the right reason must
+be accurate in all three settings; a cancellation fails at least one.
+
+\begin{table}[H]
+  \centering
+  \footnotesize
+  \setlength{\tabcolsep}{4pt}
+  \begin{adjustbox}{max width=\linewidth}
+    \input{tables/m2b_sources}
+  \end{adjustbox}
+  \caption{Relative bias of the mean of \VMbRepeats{} repeats per stack, corrected estimator
+    (\cref{dfn:ctf}). Columns: noise source and point. $^\dagger$: flagged more than two
+    standard errors below $-18$ (spread-based). Bold: the revised stack. One-off shots per estimator:
+    \VMbSetupRo{} for readout calibration (per ZNE scale: \VMbSetupRoZne), \VMbSetupTwin{} for the
+    twin, \VMbSetupRoSymTwin{} for both.}
+  \label{tab:m2b}
+\end{table}
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=\linewidth]{m2b_sources}
+  \caption{The data of Table~\ref{tab:m2b}. Each stack has four markers, one per noise setting;
+    bars are $\pm2$ standard errors from the spread between repeats. Only the shaded stack and
+    readout + ZNE (at three times the shots per energy) stay within two percent of zero in all
+    four settings and for both ansatzes.}
+  \label{fig:m2b}
+\end{figure}
+
+Figure~\ref{fig:m2b} and Table~\ref{tab:m2b} show the following.
+\begin{itemize}
+  \item \textbf{Readout + symmetry is now honest.} Readout noise only:
+    \VMbHvaRoPtRoSymRel{} (HVA) and \VMbRvbRoPtRoSymRel{} (RVB), as \cref{prop:ctf} predicts.
+    Gate noise only: \VMbHvaGatesPtRoSymRel{} and \VMbRvbGatesPtRoSymRel. Full noise:
+    \VMbHvaFullZeroRoSymRel{} (HVA, $\theta=0$), which the infinite-shot computation predicted
+    before the rerun (\VMxHvaZeroFullCtfRel, Table~\ref{tab:m2exact}).
+  \item \textbf{Adding twin rescaling removes most of the gate residual}:
+    \VMbRoSymTwinMin{} to \VMbRoSymTwinMax{} wherever there is gate noise, always positive, and
+    \VMbHvaRoPtRoSymTwinRel{} (HVA) and \VMbRvbRoPtRoSymTwinRel{} (RVB) with readout noise alone,
+    zero within error. It works on each source separately, so it is not a cancellation.
+    \Cref{sec:m2twin} explains why it works and why a small positive bias remains.
+  \item \textbf{Readout + ZNE is the fallback} for ansatzes without a symmetry:
+    \VMbRoZneMin{}--\VMbRoZneMax{} wherever there is gate noise, at \VMbShotsZne{} shots per
+    energy.
+  \item \textbf{Symmetry and ZNE must not be combined}: \VMbRoSymZneMin{} to
+    \VMbRoSymZneMax{} wherever there is gate noise, the same on gate noise alone as on full noise.
+  \item \textbf{The twin needs the filter.} Without it, HVA's twin overshoots on gate noise
+    alone (\VMbHvaGatesPtTwinRel); with it, HVA's twin works.
+\end{itemize}
+Under gate noise the filter keeps \VMbKeptMinSym{}--\VMbKeptMaxSym{} of the raw shots; after
+correction the kept quasi-weight is \VMbKeptMinRoSym{}--\VMbKeptMaxRoSym. With readout noise only it
+is \VMbHvaRoPtRoSymKept, as \cref{prop:ctf} requires.
+
+\subsection{Why the filter rescues the twin}
+\label{sec:m2twin}
+
+By \cref{prop:twinerr}, rescaling is exact only if target and twin are damped alike. The
+development session's hypothesis is that the residual noise after filtering damps singlet states
+almost uniformly. This report did not prove it; the exact infinite-shot computation of
+\cref{sec:m2cancel}, extended to gate noise alone and to the twin parameters, measures how close
+to uniform the damping is.
+
+\begin{table}[H]
+  \centering
+  \small
+  \begin{adjustbox}{max width=\linewidth}
+    \input{tables/m2_twin}
+  \end{adjustbox}
+  \caption{Damping $D=E_{\mathrm{noisy}}/E_{\mathrm{ideal}}$ with the Guadalupe gate noise and
+    infinitely many shots, for both targets and the twin. Without the filter the twin's damping
+    differs from the targets'; after correcting and filtering, all three agree to about a
+    percent.}
+  \label{tab:m2twin}
+\end{table}
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=\linewidth]{m2_twin}
+  \caption{Left: the damping of Table~\ref{tab:m2twin}; the label is the relative spread
+    $\max D/\min D-1$. Right: bias of the revised stack, sampled (dots, $\pm2$ standard errors
+    of the mean) against the infinite-shot limit (bars), from Table~\ref{tab:m2twinbias}.}
+  \label{fig:m2twin}
+\end{figure}
+
+The left panel of Figure~\ref{fig:m2twin} supports the hypothesis quantitatively. Filtering
+shrinks the spread in damping between the two targets and the twin from \VMxDampSpreadHvaRaw{}
+to \VMxDampSpreadHvaCtf{} for HVA, and from \VMxDampSpreadRvbRaw{} to \VMxDampSpreadRvbCtf{} for
+RVB. The spread does not vanish. The twin is damped slightly \emph{less} than the targets, so by
+\cref{prop:twinerr} the revised stack converges to a small positive bias, not to zero:
+\VMxTwMin{} to \VMxTwMax{} under full or gate noise (Table~\ref{tab:m2twinbias}). Under readout
+noise alone it is exact, since \cref{prop:ctf} makes both $D$ equal to $1$.
+
+\begin{table}[H]
+  \centering
+  \small
+  \begin{adjustbox}{max width=\linewidth}
+    \input{tables/m2_twin_bias}
+  \end{adjustbox}
+  \caption{Relative bias of readout + symmetry + twin. Infinite shots: \cref{prop:twinerr}
+    with the exact damping of target and twin. Sampled: Table~\ref{tab:m2b}, with the standard
+    error of the mean from the spread between the \VMbRepeats{} repeats, each with its own
+    calibration and twin. $z$: (sampled $-$ limit)/SEM.}
+  \label{tab:m2twinbias}
+\end{table}
+
+\paragraph{Sampled against the limit.} The first reruns (\py{m2b}) reused one calibration and
+one twin measurement for all repeats, so their spread left out the twin's uncertainty: for HVA
+at $\theta=0$ it was \VMoHvaFullZeroRoSymTwinSpread{} against a reported standard error of
+\VMoHvaFullZeroRoSymTwinSe{} per energy, and the bias looked like at most \VMoMaxRoSymTwin. With
+a fresh set-up per repeat (\texttt{2116da4}) the two agree (\VMbHvaFullZeroRoSymTwinSpread{}
+and \VMbHvaFullZeroRoSymTwinSe; Table~\ref{tab:m2berr}), and the sampled biases rise to
+\VMbRoSymTwinMin{}--\VMbRoSymTwinMax. Seven of the eight settings lie within two standard errors
+of their infinite-shot limit (Table~\ref{tab:m2twinbias}). The exception, HVA with full noise at
+$\theta=0$, has $z=\VMbZHvaFullZero$.
+
+To locate it, undo the rescaling repeat by repeat. The twin energies are recorded per set-up,
+and the target energy each repeat measured is
+\[
+  E_{\mathrm{noisy}}(\theta)=E_{\mathrm{mit}}\,\frac{E_{\mathrm{noisy}}(\theta_{\mathrm t})}{E_{\mathrm{ideal}}(\theta_{\mathrm t})} .
+\] Table~\ref{tab:m2twinsplit} compares both means
+with their exact values. For HVA with full noise the target agrees ($z=\VMbTargetZHvaFullZero$)
+and the twin does not ($z=\VMbTwinZHvaFullZero$). To first order the excess bias is the sum of
+the two shifts, $\VMbTwinShiftHvaFullZero+\VMbTargetShiftHvaFullZero$, on top of the limit
+\VMxTwHvaZeroFullCtfRel. Both full-noise HVA rows used the same eight twin draws (the recorded
+draws are identical in the two runs), so this is one fluctuation counted twice. The same twin
+with gate noise alone agrees ($z=\VMbTwinZHvaGatesPt$). The other component outlier, the RVB
+target at $\theta=0$ ($z=\VMbTargetZRvbFullZero$), pulls its row the other way.
+
+\begin{table}[H]
+  \centering
+  \small
+  \begin{adjustbox}{max width=\linewidth}
+    \input{tables/m2_twin_split}
+  \end{adjustbox}
+  \caption{Mean target energy (from the rescaled energies and the per-set-up twin) and mean twin
+    energy inside the revised stack, with the exact infinite-shot values in brackets and their
+    $z$-scores against the standard error of the mean.}
+  \label{tab:m2twinsplit}
+\end{table}
+
+How surprising is this? With \VMbRepeats{} repeats the standard error is itself uncertain by about
+\VMbSpreadRelErr, so $z$ follows a Student distribution with $\VMbRepeats-1$ degrees of freedom.
+If every setting sat exactly at its limit, a row with $|z|\ge\VMbZHvaFullZero$ among the eight
+would occur with probability \VMbPRow, and \VMbCompOver{} or more of the \VMbCompN{} independent
+components (the shared twin counted once) with $|z|>\VMbCompCut$ with probability \VMbPComp. The deviations are therefore suggestive, not
+conclusive. A systematic part was possible: the limit uses the device's exact readout channel,
+while each repeat calibrates with \VMbSetupRo{} shots, which also pick up gate errors in the
+calibration circuits. A systematic would persist with new seeds; a fluctuation would not.
+
+\paragraph{Check with new seeds.} At this report's suggestion the development session reran the
+outlying setting (HVA, readout + symmetry + twin, $\theta=0$) with seeds \VMqSeedA{} and
+\VMqSeedB, \VMqRepeats{} fresh-set-up repeats each, under full noise and under gate noise alone
+(\py{evaluate_fixed} directly; the numbers are quoted from \py{docs/roadmap.md}, not regenerated
+from \py{results/}). Table~\ref{tab:m2seeds} applies the same split. Under full noise the twin
+returns to its exact energy ($z=\VMqTwinZFullA$ and $\VMqTwinZFullB$), and the rows sit at
+\VMqRowFullA{} and \VMqRowFullB{} against the limit \VMxTwHvaZeroFullCtfRel. The deviation was a
+fluctuation in the twin, and any full-noise systematic from the finite calibration is below the
+precision of these runs, about \VMqRowSemFullA.
+
+\begin{table}[H]
+  \centering
+  \small
+  \begin{adjustbox}{max width=\linewidth}
+    \input{tables/m2_seed_check}
+  \end{adjustbox}
+  \caption{The outlying setting rerun with new seeds, \VMqRepeats{} repeats each (quoted from the
+    development session). Row: relative bias of readout + symmetry + twin. Twin and target split
+    as in Table~\ref{tab:m2twinsplit}; $z$ against the exact values, which are the same with
+    gate noise alone (\cref{prop:ctf}).}
+  \label{tab:m2seeds}
+\end{table}
+
+
+\paragraph{Error bars.} For readout + symmetry alone the bootstrap standard error matches
+the spread between repeats to within a factor \VMbSeRatioMin{}--\VMbSeRatioMax{}
+(Table~\ref{tab:m2berr}). The relative uncertainty of a standard deviation estimated from
+\VMbRepeats{} values is about \VMbSpreadRelErr{}, so that is the agreement to expect. The finite-shot
+price is moderate. At $\theta=0$ the raw and corrected spreads are both
+\VMbHvaFullZeroRawSpread{} for HVA. At $\theta=\VBoundTheta$ the corrected
+estimator's spread is \VMbHvaFullPtRoSymSpread{} against \VMbHvaFullPtRawSpread{} raw, consistent with
+keeping \VMbKeptMinRoSym{} of the weight plus the inversion's amplification.
+
+\begin{table}[H]
+  \centering
+  \small
+  \begin{adjustbox}{max width=\linewidth}
+    \input{tables/m2b_errors}
+  \end{adjustbox}
+  \caption{Reported standard error per energy (bootstrap for readout + symmetry; with the
+    twin's uncertainty added for the twin stack) against the spread between the
+    \VMbRepeats{} repeats, each with its own calibration and twin.}
+  \label{tab:m2berr}
+\end{table}
+
+\subsection{Full optimisations}
+
+\py{configs/m2_mitigated_vqe.toml} reruns the M1 recommendations on the same noise with the
+revised stack: HVA with plain SPSA (\VMwItersHvaSpsa{} iterations) and RVB with ADAM and
+parameter shift (\VMwItersRvbPs{} iterations, \VMwShotsPerRvbPs{} shots per basis).
+
+\begin{table}[H]
+  \centering
+  \small
+  \begin{adjustbox}{max width=\linewidth}
+    \input{tables/m2b_vqe}
+  \end{adjustbox}
+  \caption{Optimisations with readout + symmetry + twin on \py{FakeGuadalupeV2} noise. The final
+    energy is re-measured with 16384 shots per basis through the same stack. The noise-free
+    energy of the final parameters (relative error in brackets) is computed classically and
+    measures the parameters, independently of the estimator's bias.}
+  \label{tab:m2bvqe}
+\end{table}
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=\linewidth]{m2b_vqe}
+  \caption{Every mitigated energy evaluated (dots), the noise-free energy of the iterate (line),
+    and the re-measured final value. Grey: the unmitigated final energy of the same combination
+    after M0. ADAM with parameter shift evaluates shifted points, so its dots scatter above the
+    iterate.}
+  \label{fig:m2bvqe}
+\end{figure}
+
+Both runs end with parameters whose noise-free energy is within \VMwIdealErrHvaSpsa{} (HVA) and
+\VMwIdealErrRvbPs{} (RVB) of $-18$, so the optimisers work under mitigation. The re-measured
+energies, \VMwFinalHvaSpsa{} $\pm$ \VMwStdHvaSpsa{} and \VMwFinalRvbPs{} $\pm$ \VMwStdRvbPs, are
+within their errors of those noise-free values and neither is below $-18$. The total cost is
+\VMwShotsHvaSpsa{} and \VMwShotsRvbPs{} shots.
+
+The first study's optimisations (filter, then correct; Table~\ref{tab:m2vqe}) reached similar
+parameters, but HVA read \VMvFinalHvaSpsa{}, \VMvBelowHvaSpsa{} standard errors below $-18$.
+By \cref{prop:mixed} that reading is an artefact: it is the over-correction of
+\cref{sec:m2cancel}.
+
+\begin{table}[H]
+  \centering
+  \small
+  \begin{adjustbox}{max width=\linewidth}
+    \input{tables/m2_vqe}
+  \end{adjustbox}
+  \caption{First study, withdrawn stack (readout + symmetry, filter first). Same layout as
+    Table~\ref{tab:m2bvqe}.}
+  \label{tab:m2vqe}
+\end{table}
+
+\subsection{Problems solved and open}
+
+\begin{itemize}
+  \item[\checkmark] Four mitigation layers, composable, on Aer and the IBM sampler; unit-tested.
+    Exact standard errors per shot, a bootstrap for \cref{dfn:ctf}.
+  \item[\checkmark] Fixed-point evaluation with a below-ground flag and a noise-source switch:
+    every stack's bias and cost measured with full, readout-only and gate-only noise.
+  \item[\checkmark] The first chosen stack's accuracy was found to be a cancellation
+    (\cref{sec:m2cancel}) and withdrawn. The revised stack is accurate on each error source
+    separately: sampled bias \VMbRoSymTwinMin{}--\VMbRoSymTwinMax{} with gate noise, infinite-shot
+    limit \VMxTwMin{}--\VMxTwMax, zero with readout noise alone.
+  \item[\checkmark] Calibration and twin are re-measured per repeat (\texttt{2116da4}), so the
+    reported spreads include the set-up noise.
+  \item[\checkmark] Mitigated optimisations reach parameters within \VMwIdealErrHvaSpsa{} (HVA)
+    and \VMwIdealErrRvbPs{} (RVB) of the ground energy (noise-free), and the estimates read
+    \VMwFinalHvaSpsa{} and \VMwFinalRvbPs{} instead of about \VPostFinalRvbAdam.
+  \item[$\circ$] \textbf{The twin's damping is not exactly the target's}: the remaining bias of
+    up to \VMxTwMax{} comes from a \VMxDampSpreadHvaCtf{} damping mismatch (HVA), which the
+    hypothesis of near-uniform damping does not explain.
+  \item[$\circ$] \textbf{Symmetry and ZNE must not be stacked} as implemented.
+  \item[$\circ$] \textbf{Both new pieces stop at about 20 qubits}: correct-then-filter inverts
+    the readout channel on all $2^n$ outcomes, and the automatic twin needs a statevector. M3
+    lattices need replacements (for example, inverting only on the sampled strings, and Clifford
+    or matrix-product-state twins).
+  \item[$\circ$] \textbf{Hardware checks H0 and H1 are skipped}, so neither the noise floor nor
+    the mitigation has been tested against a real device.
+  \item[$\circ$] \textbf{The instance is easy} (\cref{rem:easy}): at $\theta=0$ the state is a
+    singlet product, which symmetry filtering suits unusually well. The generic point confirms
+    the trend, but M3 instances are needed before generalising.
+\end{itemize}
+
+\subsection*{Exercises}
+
+\begin{exer}
+  A qubit has $e_0=0.02$ and $e_1=0.03$. Compute $v(0)$ and $v(1)$, and check
+  $\mathbb E[v(\tilde b)\mid b=1]=-1$.
+\end{exer}
+\begin{sol}
+  $1-e_0-e_1=0.95$, so $v(0)=(1-0.03+0.02)/0.95=0.99/0.95\approx1.0421$ and
+  $v(1)=-(1+0.03-0.02)/0.95=-1.01/0.95\approx-1.0632$. Given $b=1$, the read bit is $0$ with
+  probability $e_1=0.03$, so the mean is $0.03\cdot1.0421+0.97\cdot(-1.0632)=0.03126-1.03126=-1.0000$.
+\end{sol}
+
+\begin{exer}
+  Under readout noise only, why is symmetry filtering by itself \emph{not} exact
+  (Table~\ref{tab:m2exact}: \VMxHvaZeroRoSymRel), although it removes every single-flip error?
+\end{exer}
+\begin{sol}
+  Two flips in opposite directions ($0\to1$ on one qubit and $1\to0$ on another) keep the weight
+  at $n/2$ and pass the filter. They occur with probability $O(e^2)$ per shot, but there are
+  many qubit pairs: about $\binom{12}{2}\,e^2\approx66\times(0.022)^2\approx3\,\%$ of shots carry
+  a double flip, a fraction of which pass. A pair flip inside a bond changes that bond's $Z_iZ_j$
+  reading only if exactly one of its qubits flips, which biases the energy upward by a fraction
+  of a percent.
+\end{sol}
+
+\begin{exer}
+  Use \cref{prop:twinerr} and Table~\ref{tab:m2twin} to predict the infinite-shot bias of twin
+  rescaling for HVA at $\theta=0$ under gate noise, with and without the filter. Which one
+  overshoots, and why?
+\end{exer}
+\begin{sol}
+  Without the filter, $1-D/D_{\mathrm t}=1-\VMxDampHvaZeroGtRaw/\VMxDampHvaTwinGtRaw=\VMxTwHvaZeroGtRawRel$:
+  the twin is damped more than the target, so the factor is too large and the estimate
+  overshoots below the noise-free value. With the filter,
+  $1-\VMxDampHvaZeroGtCtf/\VMxDampHvaTwinGtCtf=\VMxTwHvaZeroGtCtfRel$: the twin is now damped
+  slightly less, and a small part of the bias remains. (Computed from unrounded $D$.)
+\end{sol}
+
+\begin{exer}
+  Why does correct-then-filter give exactly the same energy under full noise as under gate
+  noise alone (Table~\ref{tab:m2exact} and \cref{sec:m2twin}), while filter-then-correct does
+  not?
+\end{exer}
+\begin{sol}
+  By \cref{prop:ctf}, inverting the exact readout channel recovers the pre-readout
+  distribution $q$, which is the same with and without readout noise; everything after that
+  depends only on $q$. Filter-then-correct applies the filter to $Aq$, whose sector part is not
+  $A$ applied to the sector part of $q$: single flips leave the sector, so the filtered
+  distribution is already almost readout-free, and the subsequent correction over-corrects
+  (\cref{prop:overcorrect}).
+\end{sol}

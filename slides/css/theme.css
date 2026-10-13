@@ -1,0 +1,100 @@
+/* theme.css — one palette with fixed meanings, shared by web figures and Manim.
+ * accent  (coral)  : what matters now — chosen vertex, separator, maximum bag
+ * derived (purple) : fill edges and derived structure; the current bag ring
+ * side-b  (teal)   : the second side of a cut
+ * muted   (gray)   : background structure
+ * Never reuse a colour for a different meaning anywhere in the deck. */
+:root {
+  --ink: #1f1e1c;        --ink-2: #5f5e5a;
+  --muted: #b4b2a9;      --muted-2: #888780;
+  --surface: #f6f5f1;    --bg: #ffffff;
+  --accent: #d85a30;     --accent-ink: #993c1d;  --accent-soft: #faece7;
+  --derived: #7f77dd;    --derived-ink: #534ab7; --derived-soft: #eeedfe;
+  --side-b: #1d9e75;     --side-b-ink: #0f6e56;  --side-b-soft: #e1f5ee;
+  --font: "Inter", "Source Sans 3", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: "JetBrains Mono", "SFMono-Regular", Menlo, monospace;
+}
+[data-theme="dark"] {
+  --ink: #f1efe8; --ink-2: #b4b2a9; --muted: #5f5e5a; --muted-2: #888780;
+  --surface: #2c2c2a; --bg: #1a1a18;
+  --accent-soft: #4a1b0c; --derived-soft: #26215c; --side-b-soft: #04342c;
+}
+
+/* ---- reveal.js base ---- */
+.reveal { font-family: var(--font); color: var(--ink); font-size: 32px; }
+.reveal h1, .reveal h2, .reveal h3 { font-family: var(--font); font-weight: 600; color: var(--ink); text-transform: none; letter-spacing: 0; }
+.reveal h2 { font-size: 1.5em; }
+.reveal .lead { color: var(--ink-2); font-size: 0.8em; }
+.reveal .math-anchor { margin-top: 0.6em; padding: 0.4em 0.8em; border-left: 3px solid var(--accent); background: var(--surface); font-size: 0.85em; }
+.reveal .theorem-name { font-weight: 600; color: var(--accent-ink); }
+.reveal .step-fragment { display: none; }   /* hidden fragments that only drive render(k) */
+.reveal table { font-size: 0.6em; }
+
+/* ---- figure layout: graph left, readouts right ---- */
+.fig { display: flex; gap: 32px; align-items: flex-start; justify-content: center; }
+.fig .tsv { width: 560px; max-width: 60%; height: auto; }
+.readouts { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; min-width: 300px; font-size: 0.55em; text-align: left; }
+.readouts .stat { background: var(--surface); border-radius: 8px; padding: 8px 12px; }
+.readouts .k { color: var(--ink-2); font-size: 0.8em; }
+.readouts [data-readout] { display: block; font-size: 1.6em; font-weight: 500; }
+.readouts .spark-wrap { grid-column: 1 / 3; }
+
+/* ---- stepper SVG ---- */
+.tsv-edge     { stroke: var(--muted); stroke-width: 1.2; }
+.tsv-fill     { stroke: var(--derived); stroke-width: 1.2; stroke-dasharray: 4 3; }
+.tsv-bagline  { stroke: var(--accent); stroke-width: 1.6; }
+.tsv-node circle { fill: var(--surface); stroke: var(--muted-2); stroke-width: 0.8; }
+.tsv-node text   { font: 500 11px var(--font); fill: var(--ink); text-anchor: middle; dominant-baseline: central; }
+.tsv-node.is-sep circle     { fill: var(--accent-soft); stroke: var(--accent); }
+.tsv-node.is-bag circle     { stroke: var(--derived-ink); stroke-width: 2.5; }
+.tsv-node.is-current circle { fill: var(--accent); stroke: var(--accent-ink); }
+.tsv-node.is-current text   { fill: #fff; }
+.tsv-node.is-gone           { opacity: 0.3; }
+.tsv-node.side-a circle     { fill: var(--derived-soft); stroke: var(--derived); }
+.tsv-node.side-b circle     { fill: var(--side-b-soft); stroke: var(--side-b); }
+.spark-bar        { fill: var(--muted); }
+.spark-bar.is-max { fill: var(--accent); }
+.spark-axis       { stroke: var(--muted-2); stroke-width: 0.5; }
+
+/* ===== kagome-vqe additions ===== */
+.reveal { font-size: 30px; }
+.reveal h2 { font-size: 1.35em; margin-bottom: 0.4em; }
+.reveal h1 { font-size: 1.9em; }
+.reveal .sub { color: var(--ink-2); font-size: 0.7em; }
+.reveal .small { font-size: 0.62em; color: var(--ink-2); }
+.reveal img.fig-img { max-height: 600px; margin: 0; }
+.reveal img.wide { width: 100%; max-height: none; }
+.reveal .cols { display: flex; gap: 40px; align-items: center; justify-content: center; }
+.reveal .cols > * { flex: 1; }
+.reveal .act { color: var(--accent-ink); font-size: 0.6em; letter-spacing: 0.06em; text-transform: uppercase; }
+.reveal ul.tight { font-size: 0.82em; line-height: 1.4; }
+.reveal ul.tight li { margin: 0.25em 0; }
+.reveal table.num { font-size: 0.78em; border-collapse: collapse; margin: 0.3em auto; }
+.reveal table.num th { color: var(--ink-2); font-weight: 500; border-bottom: 1px solid var(--muted); }
+.reveal table.num td, .reveal table.num th { padding: 0.25em 0.7em; }
+.reveal table.num td.best { color: var(--accent-ink); font-weight: 600; }
+.reveal .tiles { display: flex; gap: 18px; justify-content: center; margin: 0.4em 0; }
+.reveal .tile { background: var(--surface); border-radius: 10px; padding: 14px 24px; min-width: 230px; }
+.reveal .tile .k { display: block; color: var(--ink-2); font-size: 0.62em; }
+.reveal .tile .v { display: block; font-size: 1.15em; font-weight: 600; }
+.reveal .tile .v.accent { color: var(--accent-ink); }
+.reveal .caption { font-size: 0.72em; color: var(--ink-2); min-height: 2.6em; margin-top: 0.3em; }
+.reveal .finding { border-left: 3px solid var(--side-b); background: var(--side-b-soft); padding: 0.4em 0.9em; font-size: 0.8em; margin-top: 0.5em; text-align: left; }
+
+/* snapshot stepper */
+.fig .graph { flex: 0 0 640px; }
+.fig .ssv { width: 100%; height: auto; }
+.ssv-edge          { stroke: var(--muted); stroke-width: 2; stroke-linecap: round; }
+.ssv-edge.derived  { stroke: var(--derived); stroke-width: 5; }
+.ssv-edge.accent   { stroke: var(--accent); stroke-width: 7; }
+.ssv-edge.side-b   { stroke: var(--side-b); stroke-width: 5; stroke-dasharray: 9 6; }
+.ssv-extra         { stroke-width: 3; stroke-dasharray: 6 5; fill: none; }
+.ssv-extra.derived { stroke: var(--derived); }
+.ssv-extra.accent  { stroke: var(--accent); }
+.ssv-tri           { fill: var(--muted); opacity: 0.13; }
+.ssv-node circle   { fill: var(--bg); stroke: var(--muted-2); stroke-width: 1.4; }
+.ssv-node text     { font: 600 15px var(--font); fill: var(--ink); text-anchor: middle; dominant-baseline: central; }
+.readouts.three { grid-template-columns: 1fr; min-width: 340px; font-size: 0.8em; align-self: center; }
+.reveal .math-anchor { font-size: 0.95em; }
+.reveal .sub { font-size: 0.8em; }
+.reveal .small { font-size: 0.7em; }

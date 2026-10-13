@@ -55,3 +55,29 @@ plot +dirs:
 clean:
     rm -rf .ruff_cache .mypy_cache .pytest_cache .hypothesis .coverage coverage.xml dist build
     find . -name __pycache__ -type d -prune -exec rm -rf {} +
+
+# --- milestone documentation (report/ and slides/) ---
+
+# Regenerate every number, table, figure and slide trace from the code and results/.
+docs-figs *args:
+    uv run python -m docsgen {{args}}
+
+# Assert every number the report and deck quote.
+docs-test:
+    uv run pytest docsgen/tests -o addopts=""
+
+# Build the LaTeX report (XeLaTeX + biber) into report/output/report.pdf.
+report:
+    cd report && latexmk -interaction=nonstopmode report.tex
+
+# Install the deck's JavaScript dependencies (reveal.js, KaTeX, DeckTape) once.
+slides-setup:
+    cd slides && PUPPETEER_SKIP_DOWNLOAD=1 npm install --no-fund --no-audit
+
+# Serve the deck on http://localhost:8000 (fetch() needs HTTP, not file://).
+slides-serve:
+    cd slides && python -m http.server 8000
+
+# PDF backup of the deck, one page per click (needs slides-serve running and Chromium).
+slides-pdf:
+    cd slides && mkdir -p export/out && npx decktape reveal --fragments --size 1600x900 --chrome-path "${CHROME_PATH:-/usr/bin/chromium}" http://localhost:8000/index.html export/out/deck.pdf

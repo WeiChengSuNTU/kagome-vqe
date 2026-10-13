@@ -1,0 +1,112 @@
+\section{The software pipeline}
+\label{sec:pipeline}
+
+The package turns one TOML file into one results directory. Each stage is a module with a
+single job, so each can be tested and replaced on its own. Table~\ref{tab:pipeline} lists them in
+the order a run visits them.
+
+\begin{table}[H]
+  \centering
+  \small
+  \begin{tabular}{L{3.2cm}L{4.6cm}L{7.4cm}}
+    \toprule
+    stage & module & role \\
+    \midrule
+    configuration & \py{config.py} & pydantic models for lattice, ansatz, optimiser, backend; validated TOML in \py{configs/} \\
+    lattice & \py{lattice.py} & immutable bond list and \py{site_order} (\cref{dfn:ring}), independent of Qiskit \\
+    Hamiltonian & \py{hamiltonian.py} & \py{SparsePauliOp} of \cref{dfn:ham}; exact reference by sparse Lanczos \\
+    ansatz & \py{ansatz/} & \py{RVBAnsatz}, \py{HVAnsatz}, library baselines; \py{unshare.py} for parameter shift (\cref{sec:m1}) \\
+    compilation & \py{transpile.py} & preset pass manager (level 3), \py{initial_layout} on the heavy-hex loop, \py{observable.apply_layout} \\
+    estimation & \py{estimators.py} & exact statevector, sampled Aer (ideal or noisy), IBM Runtime; one protocol \py{EnergyEstimator} \\
+    optimisation & \py{optimizers/} & in-repo ADAM, SPSA, gradient descent; gradient strategies (forward, central, SPSA, parameter shift) \\
+    driver & \py{vqe.py} & objective with trace, ideal-energy tracking, final re-measurement \\
+    persistence & \py{results.py} & \py{results/<UTC>-<name>/}: config, result, traces, environment, log \\
+    \bottomrule
+  \end{tabular}
+  \caption{Pipeline stages of \texttt{kagome-vqe} (\py{src/kagome_vqe/}).}
+  \label{tab:pipeline}
+\end{table}
+
+\subsection{Compilation for the device}
+
+The target is \py{FakeGuadalupeV2}, Qiskit's snapshot of the 16-qubit \texttt{ibmq\_guadalupe}
+including its calibrated noise. Its coupling map is heavy-hex, with a 12-qubit loop
+$(1,2,3,5,8,11,14,13,12,10,7,4)$ (\py{GUADALUPE_HEAVY_HEX_LOOP}). Passing this loop as the initial
+layout puts every ring bond on a physical coupling, so the ring gates need no routing SWAPs. The
+observable then follows the circuit through \py{apply_layout}; this is the explicit Qiskit~2
+replacement for the accident described in \cref{sec:ansatz}.
+
+\begin{table}[H]
+  \centering
+  \input{tables/circuit_stats}
+  \caption{Circuit cost on \py{FakeGuadalupeV2} (optimisation level 3, heavy-hex loop layout).
+    ``PS energies'' is the number of energies one parameter-shift gradient needs
+    (\cref{sec:m1}). ``Unshared'' is the circuit with one parameter per gate occurrence,
+    which parameter shift requires; it has the same two-qubit cost.}
+  \label{tab:circuits}
+\end{table}
+
+Both ansatzes cost \VCxHva{} CX after transpilation, and the count does not depend on the
+layout hint (\VCxRvbNoLayout{} for RVB without it), so routing is not the cause. The count
+decomposes as $6+12\times5$: six singlet CX and five CX for each of the 12 Heisenberg bond
+gates. A general two-qubit unitary needs at most three CX, so the bond gates are not being
+resynthesised.
+
+\begin{prop}[Binding parameters before transpiling]\label{prop:bound}
+  The circuits are transpiled once with \emph{unbound} parameters. Level-3 two-qubit
+  resynthesis (block consolidation followed by unitary synthesis) needs numeric matrices and
+  skips parametric gates, so each $R_{ZZ}R_{YY}R_{XX}$ block keeps its naive decomposition
+  minus cancellations. Binding the parameters first gives $\VBoundCxHva=6+12\times3$ CX (depth
+  \VBoundDepthHva{} instead of \VDepthHva{} for HVA). At $\theta_k=\VBoundTheta$ for every
+  parameter, under the full \py{FakeGuadalupeV2} noise model, the fraction of the exact energy
+  that survives rises from \VParamKeepHva{} to \VBoundKeepHva{} (HVA) and from \VParamKeepRvb{}
+  to \VBoundKeepRvb{} (RVB).
+\end{prop}
+
+\begin{proof}
+  Measured, not derived: \py{docsgen.physics.bound_compilation} transpiles both versions with
+  the same layout and seed and evaluates each with \VNoiseShots{} shots per basis. The CX
+  counts are the transpiler's output. The comparison uses $\theta\neq0$ because at zero the
+  bound circuit collapses to the 6-CX singlet preparation, which would be a trivial win
+  (\cref{rem:easy}).
+\end{proof}
+
+\begin{rem}[Consequence for the roadmap]
+  Re-transpiling for every parameter vector costs classical time for each energy (seconds, at
+  level 3), which matters for parameter shift with \VPsEnergiesHva{} energies per step. Two cheaper
+  routes give the same 3-CX blocks: transpile the bond gate once as the textbook 3-CX
+  decomposition of $\exp(-i(aXX+bYY+cZZ))$ with parametric single-qubit rotations, or bind and
+  transpile only the 12 distinct two-qubit blocks. Either one is the first, nearly free step of
+  roadmap M4 (depth compression), and it should raise the noisy floor before any approximate
+  method is tried.
+\end{rem}
+
+\begin{rem}[A stale figure in the prose docs]
+  Until \texttt{687d0ae}, \py{docs/physics.md} (section~8) said the transpiled circuits have
+  ``66 (HVA) to 93 (RVB)'' CX, a sentence from the initial commit \texttt{d4a05ac}. With the
+  current code RVB compiles to \VCxRvb{} CX with or without the layout (\cref{tab:circuits}),
+  equal to HVA, as \cref{lem:eswap} predicts; the legacy eSWAP gives 54. The corrected text
+  gives 66 for both and attributes 93 to the 2022 notebook's layout; see \cref{sec:status}.
+\end{rem}
+
+\subsection{Estimating an energy}
+
+The Hamiltonian splits into three groups of qubit-wise commuting terms (all $XX$, all $YY$, all
+$ZZ$), so one energy costs \VMeasGroups{} measured circuits. With $s$ shots per basis, the
+estimator returns the sampled mean of each Pauli term and their weighted sum. Throughout,
+``shots per energy'' means shots per measurement basis, and ``shots spent'' counts all bases.
+
+\begin{dfn}[Relative error]
+  For an energy $E$ and the exact $E_0$, $\varepsilon(E)=|E-E_0|/|E_0|$ (\py{relative_error}).
+  The challenge asked for $\varepsilon<1\,\%$.
+\end{dfn}
+
+The package distinguishes three energies of a run, and the distinction matters from M0 on:
+\begin{itemize}
+  \item the \emph{trace} energies, one per evaluation the optimiser asked for (noisy, finite shots);
+  \item the \emph{final} energy: the final parameters re-measured once with a large, fixed budget
+    (\py{backend.final_shots}, 16384 per basis);
+  \item the \emph{ideal} energy: the exact statevector energy of the current parameters, recorded
+    after every iteration but never shown to the optimiser (\py{track_ideal_energy}). It measures
+    how good the \emph{parameters} are, separately from the noise floor.
+\end{itemize}

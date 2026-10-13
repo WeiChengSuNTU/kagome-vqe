@@ -1,0 +1,16 @@
+{
+  "name": "kagome-vqe-slides",
+  "private": true,
+  "description": "reveal.js deck for the kagome-vqe milestone reports",
+  "scripts": {
+    "serve": "python -m http.server 8000",
+    "pdf": "decktape reveal --fragments --size 1600x900 --chrome-path ${CHROME_PATH:-/usr/bin/chromium} http://localhost:8000/index.html export/out/deck.pdf"
+  },
+  "dependencies": {
+    "katex": "0.16.11",
+    "reveal.js": "5.1.0"
+  },
+  "devDependencies": {
+    "decktape": "3.14.0"
+  }
+}

@@ -1,0 +1,27 @@
+\section{Reproducing this report}
+\label{app:reproduce}
+
+All figures, tables and quoted numbers come from \py{docsgen/}, a small package at the repository
+root that reads \py{results/} and calls \py{kagome_vqe}. Nothing in the \LaTeX{} sources types a
+measured value by hand: every number is a \verb|\V<key>| macro defined in
+\py{report/tables/numbers.tex}, whose comments name the source of each value.
+
+\begin{center}
+\begin{tabular}{L{6.2cm}L{8.8cm}}
+  \toprule
+  command & effect \\
+  \midrule
+  \py{uv run python -m docsgen} & regenerate numbers, tables, figures and slide data \\
+  \py{uv run python -m docsgen --recompute} & also rerun the cached simulator studies (about a minute) \\
+  \py{uv run pytest docsgen/tests} & assert every quoted number against code and results \\
+  \py{just report} & build this PDF with \py{latexmk} (XeLaTeX, biber) into \py{report/output/} \\
+  \py{just slides-serve} & serve the reveal.js deck on \py{http://localhost:8000} \\
+  \bottomrule
+\end{tabular}
+\end{center}
+
+Five numbers are quoted from \py{docs/roadmap.md} rather than recomputed: the spread, row count
+and fake gradient of the pre-M0 seed bug (\cref{sec:m0}), whose code was replaced, and the
+roadmap's two noisy spread figures (\cref{sec:status}), which are cited for comparison.
+The test suite checks that no other number is quoted. Simulator studies use the fixed seed
+$20261010$, so a recompute reproduces the cache.

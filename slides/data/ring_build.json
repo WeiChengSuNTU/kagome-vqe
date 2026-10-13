@@ -1,0 +1,775 @@
+{
+ "schema": 1,
+ "id": "ring_build",
+ "kind": "snapshots",
+ "meta": {
+  "title": "Ring ansatz laid along a Hamiltonian cycle",
+  "site_order": [
+   0,
+   6,
+   1,
+   7,
+   2,
+   8,
+   3,
+   9,
+   4,
+   10,
+   5,
+   11
+  ]
+ },
+ "nodes": {
+  "0": [
+   0.0,
+   -120.0
+  ],
+  "1": [
+   103.92,
+   -60.0
+  ],
+  "2": [
+   103.92,
+   60.0
+  ],
+  "3": [
+   0.0,
+   120.0
+  ],
+  "4": [
+   -103.92,
+   60.0
+  ],
+  "5": [
+   -103.92,
+   -60.0
+  ],
+  "6": [
+   103.92,
+   -180.0
+  ],
+  "7": [
+   207.85,
+   -0.0
+  ],
+  "8": [
+   103.92,
+   180.0
+  ],
+  "9": [
+   -103.92,
+   180.0
+  ],
+  "10": [
+   -207.85,
+   0.0
+  ],
+  "11": [
+   -103.92,
+   -180.0
+  ]
+ },
+ "edges": [
+  [
+   "0",
+   "1"
+  ],
+  [
+   "1",
+   "2"
+  ],
+  [
+   "2",
+   "3"
+  ],
+  [
+   "3",
+   "4"
+  ],
+  [
+   "4",
+   "5"
+  ],
+  [
+   "5",
+   "0"
+  ],
+  [
+   "0",
+   "6"
+  ],
+  [
+   "1",
+   "6"
+  ],
+  [
+   "1",
+   "7"
+  ],
+  [
+   "2",
+   "7"
+  ],
+  [
+   "2",
+   "8"
+  ],
+  [
+   "3",
+   "8"
+  ],
+  [
+   "3",
+   "9"
+  ],
+  [
+   "4",
+   "9"
+  ],
+  [
+   "4",
+   "10"
+  ],
+  [
+   "5",
+   "10"
+  ],
+  [
+   "5",
+   "11"
+  ],
+  [
+   "0",
+   "11"
+  ]
+ ],
+ "steps": [
+  {
+   "caption": "The 12-site kagome star: 18 bonds, 6 corner-sharing triangles.",
+   "edges": {},
+   "readouts": {
+    "ring": "0 / 12",
+    "singlets": "0 / 6",
+    "energy": "+18.0"
+   }
+  },
+  {
+   "caption": "Ring bond q0–q1: sites 0–6 share a lattice bond.",
+   "edges": {
+    "0_6": "derived"
+   },
+   "labels": {
+    "0": "q0",
+    "6": "q1",
+    "1": "q2",
+    "7": "q3",
+    "2": "q4",
+    "8": "q5",
+    "3": "q6",
+    "9": "q7",
+    "4": "q8",
+    "10": "q9",
+    "5": "q10",
+    "11": "q11"
+   },
+   "readouts": {
+    "ring": "1 / 12",
+    "singlets": "0 / 6",
+    "energy": "+18.0"
+   }
+  },
+  {
+   "caption": "Ring bond q1–q2: sites 6–1 share a lattice bond.",
+   "edges": {
+    "0_6": "derived",
+    "1_6": "derived"
+   },
+   "labels": {
+    "0": "q0",
+    "6": "q1",
+    "1": "q2",
+    "7": "q3",
+    "2": "q4",
+    "8": "q5",
+    "3": "q6",
+    "9": "q7",
+    "4": "q8",
+    "10": "q9",
+    "5": "q10",
+    "11": "q11"
+   },
+   "readouts": {
+    "ring": "2 / 12",
+    "singlets": "0 / 6",
+    "energy": "+18.0"
+   }
+  },
+  {
+   "caption": "Ring bond q2–q3: sites 1–7 share a lattice bond.",
+   "edges": {
+    "0_6": "derived",
+    "1_6": "derived",
+    "1_7": "derived"
+   },
+   "labels": {
+    "0": "q0",
+    "6": "q1",
+    "1": "q2",
+    "7": "q3",
+    "2": "q4",
+    "8": "q5",
+    "3": "q6",
+    "9": "q7",
+    "4": "q8",
+    "10": "q9",
+    "5": "q10",
+    "11": "q11"
+   },
+   "readouts": {
+    "ring": "3 / 12",
+    "singlets": "0 / 6",
+    "energy": "+18.0"
+   }
+  },
+  {
+   "caption": "Ring bond q3–q4: sites 7–2 share a lattice bond.",
+   "edges": {
+    "0_6": "derived",
+    "1_6": "derived",
+    "1_7": "derived",
+    "2_7": "derived"
+   },
+   "labels": {
+    "0": "q0",
+    "6": "q1",
+    "1": "q2",
+    "7": "q3",
+    "2": "q4",
+    "8": "q5",
+    "3": "q6",
+    "9": "q7",
+    "4": "q8",
+    "10": "q9",
+    "5": "q10",
+    "11": "q11"
+   },
+   "readouts": {
+    "ring": "4 / 12",
+    "singlets": "0 / 6",
+    "energy": "+18.0"
+   }
+  },
+  {
+   "caption": "Ring bond q4–q5: sites 2–8 share a lattice bond.",
+   "edges": {
+    "0_6": "derived",
+    "1_6": "derived",
+    "1_7": "derived",
+    "2_7": "derived",
+    "2_8": "derived"
+   },
+   "labels": {
+    "0": "q0",
+    "6": "q1",
+    "1": "q2",
+    "7": "q3",
+    "2": "q4",
+    "8": "q5",
+    "3": "q6",
+    "9": "q7",
+    "4": "q8",
+    "10": "q9",
+    "5": "q10",
+    "11": "q11"
+   },
+   "readouts": {
+    "ring": "5 / 12",
+    "singlets": "0 / 6",
+    "energy": "+18.0"
+   }
+  },
+  {
+   "caption": "Ring bond q5–q6: sites 8–3 share a lattice bond.",
+   "edges": {
+    "0_6": "derived",
+    "1_6": "derived",
+    "1_7": "derived",
+    "2_7": "derived",
+    "2_8": "derived",
+    "3_8": "derived"
+   },
+   "labels": {
+    "0": "q0",
+    "6": "q1",
+    "1": "q2",
+    "7": "q3",
+    "2": "q4",
+    "8": "q5",
+    "3": "q6",
+    "9": "q7",
+    "4": "q8",
+    "10": "q9",
+    "5": "q10",
+    "11": "q11"
+   },
+   "readouts": {
+    "ring": "6 / 12",
+    "singlets": "0 / 6",
+    "energy": "+18.0"
+   }
+  },
+  {
+   "caption": "Ring bond q6–q7: sites 3–9 share a lattice bond.",
+   "edges": {
+    "0_6": "derived",
+    "1_6": "derived",
+    "1_7": "derived",
+    "2_7": "derived",
+    "2_8": "derived",
+    "3_8": "derived",
+    "3_9": "derived"
+   },
+   "labels": {
+    "0": "q0",
+    "6": "q1",
+    "1": "q2",
+    "7": "q3",
+    "2": "q4",
+    "8": "q5",
+    "3": "q6",
+    "9": "q7",
+    "4": "q8",
+    "10": "q9",
+    "5": "q10",
+    "11": "q11"
+   },
+   "readouts": {
+    "ring": "7 / 12",
+    "singlets": "0 / 6",
+    "energy": "+18.0"
+   }
+  },
+  {
+   "caption": "Ring bond q7–q8: sites 9–4 share a lattice bond.",
+   "edges": {
+    "0_6": "derived",
+    "1_6": "derived",
+    "1_7": "derived",
+    "2_7": "derived",
+    "2_8": "derived",
+    "3_8": "derived",
+    "3_9": "derived",
+    "4_9": "derived"
+   },
+   "labels": {
+    "0": "q0",
+    "6": "q1",
+    "1": "q2",
+    "7": "q3",
+    "2": "q4",
+    "8": "q5",
+    "3": "q6",
+    "9": "q7",
+    "4": "q8",
+    "10": "q9",
+    "5": "q10",
+    "11": "q11"
+   },
+   "readouts": {
+    "ring": "8 / 12",
+    "singlets": "0 / 6",
+    "energy": "+18.0"
+   }
+  },
+  {
+   "caption": "Ring bond q8–q9: sites 4–10 share a lattice bond.",
+   "edges": {
+    "0_6": "derived",
+    "1_6": "derived",
+    "1_7": "derived",
+    "2_7": "derived",
+    "2_8": "derived",
+    "3_8": "derived",
+    "3_9": "derived",
+    "4_9": "derived",
+    "4_10": "derived"
+   },
+   "labels": {
+    "0": "q0",
+    "6": "q1",
+    "1": "q2",
+    "7": "q3",
+    "2": "q4",
+    "8": "q5",
+    "3": "q6",
+    "9": "q7",
+    "4": "q8",
+    "10": "q9",
+    "5": "q10",
+    "11": "q11"
+   },
+   "readouts": {
+    "ring": "9 / 12",
+    "singlets": "0 / 6",
+    "energy": "+18.0"
+   }
+  },
+  {
+   "caption": "Ring bond q9–q10: sites 10–5 share a lattice bond.",
+   "edges": {
+    "0_6": "derived",
+    "1_6": "derived",
+    "1_7": "derived",
+    "2_7": "derived",
+    "2_8": "derived",
+    "3_8": "derived",
+    "3_9": "derived",
+    "4_9": "derived",
+    "4_10": "derived",
+    "5_10": "derived"
+   },
+   "labels": {
+    "0": "q0",
+    "6": "q1",
+    "1": "q2",
+    "7": "q3",
+    "2": "q4",
+    "8": "q5",
+    "3": "q6",
+    "9": "q7",
+    "4": "q8",
+    "10": "q9",
+    "5": "q10",
+    "11": "q11"
+   },
+   "readouts": {
+    "ring": "10 / 12",
+    "singlets": "0 / 6",
+    "energy": "+18.0"
+   }
+  },
+  {
+   "caption": "Ring bond q10–q11: sites 5–11 share a lattice bond.",
+   "edges": {
+    "0_6": "derived",
+    "1_6": "derived",
+    "1_7": "derived",
+    "2_7": "derived",
+    "2_8": "derived",
+    "3_8": "derived",
+    "3_9": "derived",
+    "4_9": "derived",
+    "4_10": "derived",
+    "5_10": "derived",
+    "5_11": "derived"
+   },
+   "labels": {
+    "0": "q0",
+    "6": "q1",
+    "1": "q2",
+    "7": "q3",
+    "2": "q4",
+    "8": "q5",
+    "3": "q6",
+    "9": "q7",
+    "4": "q8",
+    "10": "q9",
+    "5": "q10",
+    "11": "q11"
+   },
+   "readouts": {
+    "ring": "11 / 12",
+    "singlets": "0 / 6",
+    "energy": "+18.0"
+   }
+  },
+  {
+   "caption": "Ring bond q11–q0: sites 11–0 share a lattice bond.",
+   "edges": {
+    "0_6": "derived",
+    "1_6": "derived",
+    "1_7": "derived",
+    "2_7": "derived",
+    "2_8": "derived",
+    "3_8": "derived",
+    "3_9": "derived",
+    "4_9": "derived",
+    "4_10": "derived",
+    "5_10": "derived",
+    "5_11": "derived",
+    "0_11": "derived"
+   },
+   "labels": {
+    "0": "q0",
+    "6": "q1",
+    "1": "q2",
+    "7": "q3",
+    "2": "q4",
+    "8": "q5",
+    "3": "q6",
+    "9": "q7",
+    "4": "q8",
+    "10": "q9",
+    "5": "q10",
+    "11": "q11"
+   },
+   "readouts": {
+    "ring": "12 / 12",
+    "singlets": "0 / 6",
+    "energy": "+18.0"
+   }
+  },
+  {
+   "caption": "Singlet on q0, q1 (sites 0–6): one per triangle.",
+   "edges": {
+    "0_6": "accent",
+    "1_6": "derived",
+    "1_7": "derived",
+    "2_7": "derived",
+    "2_8": "derived",
+    "3_8": "derived",
+    "3_9": "derived",
+    "4_9": "derived",
+    "4_10": "derived",
+    "5_10": "derived",
+    "5_11": "derived",
+    "0_11": "derived"
+   },
+   "labels": {
+    "0": "q0",
+    "6": "q1",
+    "1": "q2",
+    "7": "q3",
+    "2": "q4",
+    "8": "q5",
+    "3": "q6",
+    "9": "q7",
+    "4": "q8",
+    "10": "q9",
+    "5": "q10",
+    "11": "q11"
+   },
+   "readouts": {
+    "ring": "12 / 12",
+    "singlets": "1 / 6",
+    "energy": "+10.0"
+   }
+  },
+  {
+   "caption": "Singlet on q2, q3 (sites 1–7): one per triangle.",
+   "edges": {
+    "0_6": "accent",
+    "1_6": "derived",
+    "1_7": "accent",
+    "2_7": "derived",
+    "2_8": "derived",
+    "3_8": "derived",
+    "3_9": "derived",
+    "4_9": "derived",
+    "4_10": "derived",
+    "5_10": "derived",
+    "5_11": "derived",
+    "0_11": "derived"
+   },
+   "labels": {
+    "0": "q0",
+    "6": "q1",
+    "1": "q2",
+    "7": "q3",
+    "2": "q4",
+    "8": "q5",
+    "3": "q6",
+    "9": "q7",
+    "4": "q8",
+    "10": "q9",
+    "5": "q10",
+    "11": "q11"
+   },
+   "readouts": {
+    "ring": "12 / 12",
+    "singlets": "2 / 6",
+    "energy": "+4.0"
+   }
+  },
+  {
+   "caption": "Singlet on q4, q5 (sites 2–8): one per triangle.",
+   "edges": {
+    "0_6": "accent",
+    "1_6": "derived",
+    "1_7": "accent",
+    "2_7": "derived",
+    "2_8": "accent",
+    "3_8": "derived",
+    "3_9": "derived",
+    "4_9": "derived",
+    "4_10": "derived",
+    "5_10": "derived",
+    "5_11": "derived",
+    "0_11": "derived"
+   },
+   "labels": {
+    "0": "q0",
+    "6": "q1",
+    "1": "q2",
+    "7": "q3",
+    "2": "q4",
+    "8": "q5",
+    "3": "q6",
+    "9": "q7",
+    "4": "q8",
+    "10": "q9",
+    "5": "q10",
+    "11": "q11"
+   },
+   "readouts": {
+    "ring": "12 / 12",
+    "singlets": "3 / 6",
+    "energy": "−2.0"
+   }
+  },
+  {
+   "caption": "Singlet on q6, q7 (sites 3–9): one per triangle.",
+   "edges": {
+    "0_6": "accent",
+    "1_6": "derived",
+    "1_7": "accent",
+    "2_7": "derived",
+    "2_8": "accent",
+    "3_8": "derived",
+    "3_9": "accent",
+    "4_9": "derived",
+    "4_10": "derived",
+    "5_10": "derived",
+    "5_11": "derived",
+    "0_11": "derived"
+   },
+   "labels": {
+    "0": "q0",
+    "6": "q1",
+    "1": "q2",
+    "7": "q3",
+    "2": "q4",
+    "8": "q5",
+    "3": "q6",
+    "9": "q7",
+    "4": "q8",
+    "10": "q9",
+    "5": "q10",
+    "11": "q11"
+   },
+   "readouts": {
+    "ring": "12 / 12",
+    "singlets": "4 / 6",
+    "energy": "−8.0"
+   }
+  },
+  {
+   "caption": "Singlet on q8, q9 (sites 4–10): one per triangle.",
+   "edges": {
+    "0_6": "accent",
+    "1_6": "derived",
+    "1_7": "accent",
+    "2_7": "derived",
+    "2_8": "accent",
+    "3_8": "derived",
+    "3_9": "accent",
+    "4_9": "derived",
+    "4_10": "accent",
+    "5_10": "derived",
+    "5_11": "derived",
+    "0_11": "derived"
+   },
+   "labels": {
+    "0": "q0",
+    "6": "q1",
+    "1": "q2",
+    "7": "q3",
+    "2": "q4",
+    "8": "q5",
+    "3": "q6",
+    "9": "q7",
+    "4": "q8",
+    "10": "q9",
+    "5": "q10",
+    "11": "q11"
+   },
+   "readouts": {
+    "ring": "12 / 12",
+    "singlets": "5 / 6",
+    "energy": "−14.0"
+   }
+  },
+  {
+   "caption": "Singlet on q10, q11 (sites 5–11): one per triangle.",
+   "edges": {
+    "0_6": "accent",
+    "1_6": "derived",
+    "1_7": "accent",
+    "2_7": "derived",
+    "2_8": "accent",
+    "3_8": "derived",
+    "3_9": "accent",
+    "4_9": "derived",
+    "4_10": "accent",
+    "5_10": "derived",
+    "5_11": "accent",
+    "0_11": "derived"
+   },
+   "labels": {
+    "0": "q0",
+    "6": "q1",
+    "1": "q2",
+    "7": "q3",
+    "2": "q4",
+    "8": "q5",
+    "3": "q6",
+    "9": "q7",
+    "4": "q8",
+    "10": "q9",
+    "5": "q10",
+    "11": "q11"
+   },
+   "readouts": {
+    "ring": "12 / 12",
+    "singlets": "6 / 6",
+    "energy": "−18.0"
+   }
+  },
+  {
+   "caption": "The odd ring bonds are the other dimer covering: the ring is the union of the two.",
+   "edges": {
+    "0_6": "accent",
+    "1_6": "side-b",
+    "1_7": "accent",
+    "2_7": "side-b",
+    "2_8": "accent",
+    "3_8": "side-b",
+    "3_9": "accent",
+    "4_9": "side-b",
+    "4_10": "accent",
+    "5_10": "side-b",
+    "5_11": "accent",
+    "0_11": "side-b"
+   },
+   "labels": {
+    "0": "q0",
+    "6": "q1",
+    "1": "q2",
+    "7": "q3",
+    "2": "q4",
+    "8": "q5",
+    "3": "q6",
+    "9": "q7",
+    "4": "q8",
+    "10": "q9",
+    "5": "q10",
+    "11": "q11"
+   },
+   "readouts": {
+    "ring": "12 / 12",
+    "singlets": "6 / 6",
+    "energy": "−18.0"
+   }
+  }
+ ]
+}

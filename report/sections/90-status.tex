@@ -1,0 +1,77 @@
+\section{Status, scorecard and open problems}
+\label{sec:status}
+
+\begin{table}[H]
+  \centering
+  \small
+  \begin{tabular}{L{1.2cm}L{4.4cm}L{6.6cm}L{1.6cm}}
+    \toprule
+    & question & answer so far & status \\
+    \midrule
+    M0 & Are the noisy numbers real? & Not before M0. Floor now \VPostFinalMin{} to
+      \VPostFinalMax{}; a bias, not a convergence failure (\cref{sec:noise}). & done \\
+    M1 & Which gradient gives most precision per shot? & RVB: ADAM + parameter shift
+      (\VMIdealRvbPs). HVA: plain SPSA (\VMIdealHvaSpsa). & done \\
+    M2 & How much bias can mitigation remove? & Nearly all: readout, then symmetry, then twin,
+      \VMbRoSymTwinMin--\VMbRoSymTwinMax{} sampled, \VMxTwMin--\VMxTwMax{} in the infinite-shot
+      limit, on each error source separately (\cref{sec:m2twin}). First stack withdrawn: a cancellation
+      (\cref{sec:m2cancel}). & done \\
+    M3 & Is the benchmark testing anything? & Not much: exact at zero parameters
+      (\cref{thm:cycle}). & planned \\
+    M4 & How far can depth fall? & Free first step found: bind parameters before
+      transpiling, \VCxHva{} $\to$ \VBoundCxHva{} CX (\cref{prop:bound}). & planned \\
+    M5 & Can subspace methods remove the rest? & -- & planned \\
+    \bottomrule
+  \end{tabular}
+  \caption{Running scorecard, one row per roadmap milestone (\py{docs/roadmap.md}).}
+  \label{tab:scorecard}
+\end{table}
+
+\subsection{Open problems}
+
+\begin{enumerate}
+  \item \textbf{The noisy floor} (\VFloorHvaFull{} at the exact parameters) is the dominant
+    error, about \VPostErrHvaSpsa. Better optimisers cannot remove it (\cref{prop:mixed} and \cref{prop:depol}).
+    Readout correction, symmetry filtering and twin rescaling remove all but
+    \VMxTwMin--\VMxTwMax{} of it in the infinite-shot limit (\cref{sec:m2twin}). The rest comes
+    from the twin being damped slightly less than the target; fewer CX (M4) shrink it.
+  \item \textbf{Mitigated energies below $-18$} are artefacts (\cref{prop:mixed}). Every new stack
+    should be checked with readout-only and gate-only noise as well as full noise, so that a
+    cancellation like \cref{sec:m2cancel} is visible. \py{backend.noise} now makes that a
+    configuration switch.
+  \item \textbf{Mitigation at M3 sizes}: correct-then-filter and the automatic twin both stop at
+    about 20 qubits (\cref{sec:m2}).
+  \item \textbf{Hardware checks H0 and H1} are deferred; every noisy number here is a simulation of
+    a 2022 calibration snapshot.
+  \item \textbf{M1 follow-ups:} decaying ADAM learning rate for HVA; longer RVB runs; more seeds
+    with device noise.
+  \item \textbf{The instance is easy} (\cref{rem:easy}); results should be re-validated on M3
+    instances before conclusions generalise.
+\end{enumerate}
+
+\subsection{Issues found while writing this report}
+
+These were found by recomputing every number from the code. The development session
+reproduced each of them and fixed the prose and code on \py{main} (\texttt{687d0ae},
+\texttt{56aadd3}, \texttt{2116da4}).
+\begin{itemize}
+  \item Parametric transpilation leaves each Heisenberg block at 5 CX instead of 3
+    (\cref{prop:bound}). Binding first gives \VBoundCxHva{} CX and keeps \VBoundKeepHva{} instead of
+    \VParamKeepHva{} of the energy at a generic point.
+  \item \py{docs/physics.md} quoted 93 CX for RVB; the code gives \VCxRvb.
+  \item The README's seed spreads were population standard deviations (Table~\ref{tab:m1},
+    footnote); \py{main} now uses sample standard deviations.
+  \item The M0 spread figures and those in this report were measured under different conditions,
+    and both are valid. The roadmap's figures (\VRoadmapSpreadLow{} at 1024 shots, \VRoadmapSpreadHigh{} at 4096) were taken
+    \emph{with} \py{FakeGuadalupeV2} noise at the exact parameters, where noise breaks the
+    cancellation of \cref{prop:zerovar}. This report's figures (\VSpreadLowReal, \VSpreadHighReal)
+    are noise-free at the start point. Without noise the spread at the optimum is exactly zero,
+    so the roadmap now states the conditions of its measurement.
+  \item The M2 readout + symmetry stack over-corrects by \VMxOverPct{} and is accurate only by
+    cancellation (\cref{sec:m2cancel}); \py{main} now corrects before filtering.
+  \item The fixed-point evaluation reused one calibration and one twin measurement for all
+    repeats, so the spread of twin stacks left out the twin's uncertainty (\cref{sec:m2twin});
+    \py{main} now builds a fresh estimator per repeat.
+  \item \py{HVAnsatz}'s docstring writes $e^{-i\gamma\Hev}e^{-i\phi\Hod}$; the circuit implements
+    $e^{-i\frac\gamma2\Hev}e^{-i\frac\phi2\Hod}$ (\cref{dfn:ansatz}). Only the convention differs.
+\end{itemize}

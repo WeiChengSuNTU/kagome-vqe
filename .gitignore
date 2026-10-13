@@ -33,3 +33,22 @@ htmlcov/
 .vscode/
 .idea/
 .DS_Store
+
+# Milestone documentation build outputs
+report/output/
+slides/node_modules/
+slides/export/out/
+docsgen/cache/*.tmp
+
+report/*.aux
+report/*.bbl
+report/*.bcf
+report/*.blg
+report/*.fdb_latexmk
+report/*.fls
+report/*.log
+report/*.out
+report/*.pdf
+report/*.run.xml
+report/*.toc
+report/*.xdv

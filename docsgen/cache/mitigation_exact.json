@@ -1,0 +1,163 @@
+{
+ "points": [
+  0.0,
+  0.3,
+  "twin"
+ ],
+ "energies": {
+  "hva_0.0_full": {
+   "raw": -12.788223217647982,
+   "readout": -14.010683152285225,
+   "symmetry": -16.430060293248605,
+   "readout_symmetry": -18.02026156681712,
+   "correct_then_filter": -17.095809356242352
+  },
+  "hva_0.0_gates_only": {
+   "raw": -14.010683152285228,
+   "readout": -14.010683152285228,
+   "symmetry": -17.095809356242352,
+   "readout_symmetry": -17.095809356242352,
+   "correct_then_filter": -17.095809356242352
+  },
+  "hva_0.0_readout_only": {
+   "raw": -16.43676347999974,
+   "readout": -17.999999999999698,
+   "symmetry": -17.856687264562765,
+   "readout_symmetry": -19.575313996743013,
+   "correct_then_filter": -18.0
+  },
+  "hva_0.3_full": {
+   "raw": -11.890803049220857,
+   "readout": -12.968467781459907,
+   "symmetry": -15.342043716063579,
+   "readout_symmetry": -16.752777624133344,
+   "correct_then_filter": -15.924464337928377
+  },
+  "hva_0.3_gates_only": {
+   "raw": -12.968467781459903,
+   "readout": -12.968467781459903,
+   "symmetry": -15.924464337928377,
+   "readout_symmetry": -15.924464337928377,
+   "correct_then_filter": -15.924464337928377
+  },
+  "hva_0.3_readout_only": {
+   "raw": -15.289172228556673,
+   "readout": -16.656726077904544,
+   "symmetry": -16.53431035465724,
+   "readout_symmetry": -18.027337393147057,
+   "correct_then_filter": -16.656726077904874
+  },
+  "hva_twin_full": {
+   "raw": -7.612062633698024,
+   "readout": -8.361472630830347,
+   "symmetry": -10.49249299231634,
+   "readout_symmetry": -11.543450849512569,
+   "correct_then_filter": -10.822024178836582
+  },
+  "hva_twin_gates_only": {
+   "raw": -8.361472630830347,
+   "readout": -8.361472630830347,
+   "symmetry": -10.822024178836582,
+   "readout_symmetry": -10.822024178836582,
+   "correct_then_filter": -10.822024178836582
+  },
+  "hva_twin_readout_only": {
+   "raw": -10.245525097499844,
+   "readout": -11.24999999999983,
+   "symmetry": -11.179015366576566,
+   "readout_symmetry": -12.291702178939836,
+   "correct_then_filter": -11.250000000000007
+  },
+  "rvb_0.0_full": {
+   "raw": -12.721475134595648,
+   "readout": -13.937269816933775,
+   "symmetry": -16.38936437166219,
+   "readout_symmetry": -17.976017624678626,
+   "correct_then_filter": -17.065888088408904
+  },
+  "rvb_0.0_gates_only": {
+   "raw": -13.937269816933778,
+   "readout": -13.937269816933778,
+   "symmetry": -17.065888088408904,
+   "readout_symmetry": -17.065888088408904,
+   "correct_then_filter": -17.065888088408904
+  },
+  "rvb_0.0_readout_only": {
+   "raw": -16.436763479999694,
+   "readout": -17.999999999999652,
+   "symmetry": -17.85668726456277,
+   "readout_symmetry": -19.575313996743017,
+   "correct_then_filter": -18.000000000000004
+  },
+  "rvb_0.3_full": {
+   "raw": -12.477066533511312,
+   "readout": -13.649025442892377,
+   "symmetry": -16.08520158068294,
+   "readout_symmetry": -17.61663581819534,
+   "correct_then_filter": -16.736139691647363
+  },
+  "rvb_0.3_gates_only": {
+   "raw": -13.649025442892377,
+   "readout": -13.649025442892377,
+   "symmetry": -16.736139691647363,
+   "readout_symmetry": -16.736139691647363,
+   "correct_then_filter": -16.736139691647363
+  },
+  "rvb_0.3_readout_only": {
+   "raw": -16.1128817099203,
+   "readout": -17.6151889538034,
+   "symmetry": -17.478296790804293,
+   "readout_symmetry": -19.126224400145063,
+   "correct_then_filter": -17.61518895380363
+  },
+  "rvb_twin_full": {
+   "raw": -11.025760454099617,
+   "readout": -11.988418023671263,
+   "symmetry": -14.437303657813306,
+   "readout_symmetry": -15.729013210938193,
+   "correct_then_filter": -14.969877835236968
+  },
+  "rvb_twin_gates_only": {
+   "raw": -11.988418023671262,
+   "readout": -11.988418023671262,
+   "symmetry": -14.969877835236966,
+   "readout_symmetry": -14.969877835236966,
+   "correct_then_filter": -14.969877835236966
+  },
+  "rvb_twin_readout_only": {
+   "raw": -14.421011546948169,
+   "readout": -15.676237822086867,
+   "symmetry": -15.570734362351402,
+   "readout_symmetry": -16.93852756666781,
+   "correct_then_filter": -15.676237822087167
+  }
+ },
+ "kept": {
+  "hva_0.0_full": 0.5034397197722461,
+  "hva_0.0_gates_only": 0.5941590682299988,
+  "hva_0.0_readout_only": 0.7772996550282905,
+  "hva_0.3_full": 0.4988421775545946,
+  "hva_0.3_gates_only": 0.5885244475191995,
+  "hva_0.3_readout_only": 0.7772184812968658,
+  "hva_twin_full": 0.4831249377107434,
+  "hva_twin_gates_only": 0.5688983569139694,
+  "hva_twin_readout_only": 0.7773481765222212,
+  "rvb_0.0_full": 0.4989060604457851,
+  "rvb_0.0_gates_only": 0.587473257729937,
+  "rvb_0.0_readout_only": 0.7772996550282883,
+  "rvb_0.3_full": 0.49791262663646374,
+  "rvb_0.3_gates_only": 0.5863075782590754,
+  "rvb_0.3_readout_only": 0.7772714702659194,
+  "rvb_twin_full": 0.4933342361061735,
+  "rvb_twin_gates_only": 0.58066026221032,
+  "rvb_twin_readout_only": 0.7773009382411958
+ },
+ "exact": {
+  "hva_0.0": -17.999999999999996,
+  "hva_0.3": -16.656726077904807,
+  "hva_twin": -11.249999999999977,
+  "rvb_0.0": -17.999999999999996,
+  "rvb_0.3": -17.615188953803678,
+  "rvb_twin": -15.676237822087144
+ }
+}
