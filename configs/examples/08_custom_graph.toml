@@ -1,0 +1,33 @@
+# 8. A custom interaction graph given explicitly (no generator, no geometry): a 6-site
+# "bow tie" of two triangles joined by a bond, with one weaker coupling and an explicit dimer
+# covering. Only the bond list defines the Hamiltonian and the graph_hva circuit.
+#   kagome-vqe lattice configs/examples/08_custom_graph.toml --plot custom.png
+#   kagome-vqe run configs/examples/08_custom_graph.toml
+name = "custom_bowtie"
+seed = 3
+x0_scale = 0.1
+
+[lattice]
+kind = "custom"
+num_sites = 6
+t = 1.0                            # coupling of two-element bonds
+bonds = [
+  [0, 1], [1, 2], [2, 0],          # triangle A
+  [3, 4], [4, 5], [5, 3],          # triangle B
+  [2, 3, 0.5],                     # bridge with J = 0.5
+]
+boundary = "unspecified"
+dimers = [[0, 1], [2, 3], [4, 5]]
+
+[ansatz]
+type = "graph_hva"
+reps = 2
+include_h0 = true
+
+[optimizer]
+type = "scipy"
+method = "L-BFGS-B"
+maxiter = 200
+
+[backend]
+kind = "statevector"

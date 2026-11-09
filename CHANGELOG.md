@@ -8,6 +8,25 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- Generalised lattices and the graph-based HVA (`docs/graph_hva.md`):
+  - `Lattice` gains optional triangular-lattice `coords`, `boundary`, `wrapped_bonds` and a
+    validated `dimers` covering; `find_dimer_covering`, `count_dimer_coverings`.
+  - `kagome_lattices`: `kagome_kvqe20`, `kagome_bm_rectangle`, `kagome_patch`,
+    `kagome_periodic`, `custom_lattice`; `[lattice] kind` selects them.
+  - `schedule`: deterministic edge-colouring (`greedy`), PRB 105 (`prb105`, `prb105_fig3`),
+    PRB 106 (`prb106`) and explicit schedules.
+  - `GraphHVAnsatz` (`ansatz.type = "graph_hva"`): one parameter per gate, optional per-cycle
+    H0 evolution, phase-only and redundant-parameter diagnostics, optional pruning.
+  - `mapping` package: `prb105`, `prb106_grid` and `generic` strategies with a shared
+    order-preserving SWAP router, 3-CNOT exchange synthesis, SWAP merging, VF2 hardware
+    placement with calibration scoring, `paper_exact` / `paper_inspired` / fallback status;
+    `[mapping]` config; `transpile.compile_mapping`.
+  - `kagome-vqe map` (compile-only strategy comparison), `kagome-vqe lattice`,
+    `kagome-vqe exact --config`; `visualize.plot_lattice`; example configs in
+    `configs/examples/`.
+  - Runs record the noise-free ground-space fidelity (`ideal_fidelity`) and
+    `IsaProblem.two_qubit_depth`.
+
 - Roadmap M2, error mitigation (`kagome_vqe.mitigation`, `RunConfig.mitigation`):
   - `CountsEnergy` measures each basis through a sampler, corrects readout errors with
     unbiased per-shot weights, filters shots outside the total-spin-singlet sector, and

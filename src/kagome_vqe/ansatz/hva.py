@@ -8,14 +8,19 @@ from qiskit.circuit import ParameterExpression, QuantumCircuit
 
 from kagome_vqe.ansatz.base import RingAnsatz
 
-__all__ = ["HVAnsatz"]
+__all__ = ["HVAnsatz", "heisenberg_bond"]
 
 
-def _heisenberg_bond(circuit: QuantumCircuit, theta: ParameterExpression, a: int, b: int) -> None:
+def heisenberg_bond(
+    circuit: QuantumCircuit, theta: ParameterExpression | float, a: int, b: int
+) -> None:
     """Append ``exp(-i theta/2 (ZZ + YY + XX))`` on ``(a, b)`` as three commuting rotations."""
     circuit.rzz(theta, a, b)
     circuit.ryy(theta, a, b)
     circuit.rxx(theta, a, b)
+
+
+_heisenberg_bond = heisenberg_bond  # backwards-compatible private name
 
 
 class HVAnsatz(RingAnsatz):

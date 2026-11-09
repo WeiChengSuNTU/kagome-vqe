@@ -1,0 +1,28 @@
+# 3. Graph-based HVA with an independently parameterised H0 evolution per cycle (PRB 105
+# "per edge" ansatz): p * (N_b + 1) parameters. Lattice: the 2 x 6 Bosse-Montanaro rectangle
+# (12 sites, 16 bonds); schedule = PRB 105 groups in the order of their Eq. (4), with H0 at the
+# end of every cycle, so that no gate is wasted on a global phase and H0 never fuses with H1.
+#   kagome-vqe run configs/examples/03_graph_hva_with_h0.toml
+name = "graph_hva_bm2x6_with_h0"
+seed = 7
+x0_scale = 0.1
+
+[lattice]
+kind = "kagome_bm_rectangle"
+rows = 2
+cols = 6                           # even: the colour-1 pairs form the paper's dimer covering
+
+[ansatz]
+type = "graph_hva"
+reps = 3
+include_h0 = true
+h0_position = "end"
+schedule = "prb105"                # H4, H5, H1, H2, H3 (Eq. (4)); "prb105_fig3" = H1..H5
+
+[optimizer]
+type = "scipy"
+method = "L-BFGS-B"
+maxiter = 300
+
+[backend]
+kind = "statevector"

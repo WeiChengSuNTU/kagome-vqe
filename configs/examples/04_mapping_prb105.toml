@@ -1,0 +1,31 @@
+# 4. PRB 105 (Bosse & Montanaro) square-grid embedding on a noisy Nighthawk simulation.
+# The 3 x 8 rectangle with the paper's schedule is reproduced exactly ("paper_exact"):
+# 24 qubits, no auxiliaries, 7 two-qubit layers (exchange or SWAP) per cycle.
+#   kagome-vqe run configs/examples/04_mapping_prb105.toml --dry-run
+#   kagome-vqe map configs/examples/04_mapping_prb105.toml
+name = "prb105_bm3x8_nighthawk"
+seed = 11
+
+[lattice]
+kind = "kagome_bm_rectangle"
+rows = 3
+cols = 8
+
+[ansatz]
+type = "graph_hva"
+reps = 2
+schedule = "prb105"
+
+[optimizer]
+type = "spsa"
+maxiter = 50
+
+[backend]
+kind = "aer_noisy"
+name = "FakeNighthawk"
+shots = 4096
+optimization_level = 3
+
+[mapping]
+strategy = "prb105"
+fallback = "error"                 # never substitute generic routing silently

@@ -1,0 +1,29 @@
+# 5. PRB 106 (Kattemolle & van Wezel) KVQE_G grid with swapping stations: the paper's 20-site
+# patch and six-layer cycle ("paper_exact"): 24 grid qubits of which 4 are stations (|0>),
+# 30 exchange gates + 16 SWAPs and two-qubit depth 6 per cycle.
+#   kagome-vqe run configs/examples/05_mapping_prb106.toml --dry-run
+#   kagome-vqe map configs/examples/05_mapping_prb106.toml
+name = "prb106_kvqe20_nighthawk"
+seed = 11
+
+[lattice]
+kind = "kagome_kvqe20"
+
+[ansatz]
+type = "graph_hva"
+reps = 2
+schedule = "prb106"
+
+[optimizer]
+type = "spsa"
+maxiter = 50
+
+[backend]
+kind = "aer_noisy"
+name = "FakeNighthawk"
+shots = 4096
+optimization_level = 3
+
+[mapping]
+strategy = "prb106_grid"
+fallback = "error"

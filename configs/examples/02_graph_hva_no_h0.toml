@@ -1,0 +1,29 @@
+# 2. Graph-based HVA without H0 on a nontrivial lattice: the 12-site periodic kagome torus
+# (2 x 2 unit cells, 24 bonds, E0 = -21.7795 in Pauli units). One parameter per exchange gate
+# (OPG): p * N_b = 2 * 24 = 48 parameters. Exact statevector; scipy L-BFGS-B with its own
+# finite-difference gradient (fine for noiseless energies).
+#   kagome-vqe run configs/examples/02_graph_hva_no_h0.toml
+name = "graph_hva_torus2x2_no_h0"
+seed = 7
+x0_scale = 0.1
+
+[lattice]
+kind = "kagome_periodic"
+rows = 2                           # unit cells along the first lattice vector
+cols = 2
+dimers = "default"                 # no generator covering -> first perfect matching
+
+[ansatz]
+type = "graph_hva"
+reps = 2
+parameterization = "opg"
+include_h0 = false
+schedule = "greedy"                # deterministic minimal edge colouring (4 layers)
+
+[optimizer]
+type = "scipy"
+method = "L-BFGS-B"
+maxiter = 300
+
+[backend]
+kind = "statevector"

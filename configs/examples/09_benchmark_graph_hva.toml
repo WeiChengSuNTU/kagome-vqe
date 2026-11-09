@@ -1,0 +1,27 @@
+# 9. VQE benchmark on the exact simulator: graph_hva with and without H0 on the open 12-site
+# star, compared with the legacy ring HVA. Run with:
+#   kagome-vqe benchmark configs/examples/09_benchmark_graph_hva.toml
+name = "graph_hva_star"
+seed = 5
+x0_scale = 0.1
+
+[lattice]
+kind = "kagome_unit_cell"
+
+[backend]
+kind = "statevector"
+
+[[combos]]
+label = "hva_ring"
+ansatz = { type = "hva", reps = 1 }
+optimizer = { type = "scipy", method = "L-BFGS-B", maxiter = 200 }
+
+[[combos]]
+label = "graph_hva_no_h0"
+ansatz = { type = "graph_hva", reps = 1 }
+optimizer = { type = "scipy", method = "L-BFGS-B", maxiter = 200 }
+
+[[combos]]
+label = "graph_hva_with_h0"
+ansatz = { type = "graph_hva", reps = 1, include_h0 = true }
+optimizer = { type = "scipy", method = "L-BFGS-B", maxiter = 200 }

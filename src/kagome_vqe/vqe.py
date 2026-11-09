@@ -17,17 +17,24 @@ from typing import Any
 
 import numpy as np
 from numpy.typing import NDArray
+from qiskit.circuit import QuantumCircuit
 from qiskit.quantum_info import SparsePauliOp
 
-from kagome_vqe.ansatz import Ansatz
+from kagome_vqe.ansatz import Ansatz, GraphHVAnsatz
 from kagome_vqe.ansatz.unshare import ParameterMap, unshare_parameters
 from kagome_vqe.backends import resolve_backend
 from kagome_vqe.config import RunConfig, Settings
 from kagome_vqe.estimators import EnergyEstimator, StatevectorEnergy, make_estimator
-from kagome_vqe.hamiltonian import exact_spectrum, heisenberg_hamiltonian, relative_error
+from kagome_vqe.hamiltonian import (
+    exact_ground_space,
+    exact_spectrum,
+    ground_state_fidelity,
+    heisenberg_hamiltonian,
+    relative_error,
+)
 from kagome_vqe.lattice import Lattice
 from kagome_vqe.optimizers import IterationInfo, Optimizer
-from kagome_vqe.transpile import IsaProblem, compile_for_backend
+from kagome_vqe.transpile import IsaProblem, compile_for_backend, compile_mapping
 
 __all__ = [
     "IDEAL_TRACKING_MAX_QUBITS",
@@ -37,6 +44,7 @@ __all__ = [
     "Prepared",
     "TraceRow",
     "VQERunResult",
+    "compile_problem",
     "evaluate_fixed",
     "prepare",
     "run_vqe",
@@ -229,11 +237,19 @@ class Prepared:
             },
             "hamiltonian_terms": len(self.hamiltonian),
             "exact_spectrum": [float(v) for v in self.exact_spectrum],
+            "lattice_details": {
+                "boundary": self.lattice.boundary,
+                "has_geometry": self.lattice.has_geometry,
+                "wrapped_bonds": len(self.lattice.wrapped_bonds),
+                "dimers": None if self.lattice.dimers is None else len(self.lattice.dimers),
+            },
             "ansatz": {
                 "name": self.ansatz.name,
                 "num_parameters": self.ansatz.num_parameters,
                 "circuit_parameters": self.parameter_map.num_occurrences,
+                **(self.ansatz.describe() if isinstance(self.ansatz, GraphHVAnsatz) else {}),
             },
+            "mapping": self.config.mapping.model_dump(),
             "optimizer": self.config.optimizer.model_dump(),
             "backend": self.config.backend.label(),
             "mitigation": self.config.mitigation.label(),
@@ -293,6 +309,9 @@ class VQERunResult:
         ideal_energy: Noise-free energy of the final parameters, if tracked. On noisy backends
             this measures how good the parameters are, separately from the noise floor.
         ideal_trace: Noise-free energy after every iteration, with shots spent, if tracked.
+        ideal_fidelity: Overlap of the noise-free final state with the exact (possibly
+            degenerate) ground space, if tracked. Separates circuit expressiveness and
+            optimiser convergence from the energy alone.
     """
 
     config: RunConfig
@@ -315,6 +334,7 @@ class VQERunResult:
     total_shots: int = 0
     ideal_energy: float | None = None
     ideal_trace: list[IdealPoint] = field(default_factory=list)
+    ideal_fidelity: float | None = None
 
     @property
     def ideal_relative_error(self) -> float | None:
@@ -363,14 +383,7 @@ def prepare(cfg: RunConfig, *, settings: Settings | None = None) -> Prepared:
     else:
         parameter_map = ParameterMap.identity(ansatz.num_parameters)
     backend = resolve_backend(cfg.backend, settings)
-    problem = compile_for_backend(
-        circuit,
-        hamiltonian,
-        backend,
-        optimization_level=cfg.backend.optimization_level,
-        initial_layout=cfg.backend.initial_layout,
-        seed_transpiler=cfg.seed,
-    )
+    problem = compile_problem(cfg, lattice, ansatz, circuit, hamiltonian, backend)
     spectrum = exact_spectrum(hamiltonian, k=3)
     optimizer = cfg.optimizer.build(np.random.default_rng(cfg.seed), parameter_map)
     per_iter = optimizer.evaluations_per_iteration(ansatz.num_parameters)
@@ -394,6 +407,75 @@ def prepare(cfg: RunConfig, *, settings: Settings | None = None) -> Prepared:
         projected_evaluations=projected,
         parameter_map=parameter_map,
         twin=_twin(cfg, ansatz, hamiltonian, float(spectrum[0])),
+    )
+
+
+def compile_problem(
+    cfg: RunConfig,
+    lattice: Lattice,
+    ansatz: Ansatz,
+    circuit: QuantumCircuit,
+    hamiltonian: SparsePauliOp,
+    backend: Any | None,
+) -> IsaProblem:
+    """Map and compile ``circuit`` as ``cfg.mapping`` and ``cfg.backend`` ask.
+
+    The ring and library ansatzes with ``mapping.strategy = "generic"`` take exactly the path
+    they always took (:func:`~kagome_vqe.transpile.compile_for_backend`). ``graph_hva`` and the
+    geometric strategies go through :func:`kagome_vqe.mapping.map_circuit` and
+    :func:`~kagome_vqe.transpile.compile_mapping`, which records strategy, status and
+    resources in ``IsaProblem.mapping``.
+    """
+    mapping = cfg.mapping
+    if mapping.strategy == "generic" and not isinstance(ansatz, GraphHVAnsatz):
+        return compile_for_backend(
+            circuit,
+            hamiltonian,
+            backend,
+            optimization_level=cfg.backend.optimization_level,
+            initial_layout=cfg.backend.initial_layout,
+            seed_transpiler=cfg.seed,
+        )
+    from kagome_vqe.mapping import MappingError, map_circuit
+
+    result = map_circuit(
+        mapping.strategy,
+        lattice,
+        circuit,
+        hamiltonian,
+        schedule=ansatz.schedule if isinstance(ansatz, GraphHVAnsatz) else None,
+        fallback=mapping.fallback,
+        restore_at_end=mapping.restore_at_end,
+        merge_swaps=mapping.merge_swaps,
+        exchange=mapping.exchange_synthesis,
+    )
+    if result.is_routed and backend is not None:
+        try:
+            return compile_mapping(
+                result,
+                hamiltonian,
+                backend,
+                optimization_level=cfg.backend.optimization_level,
+                physical_layout=mapping.physical_layout,
+                seed_transpiler=cfg.seed,
+            )
+        except MappingError as exc:
+            if mapping.fallback != "generic":
+                raise
+            log.warning("placement of %s failed (%s); generic fallback", result.used, exc)
+            result = map_circuit(
+                "generic", lattice, circuit, hamiltonian, exchange=mapping.exchange_synthesis
+            )
+            result.requested, result.status = mapping.strategy, "generic_fallback"
+            result.notes.append(f"fallback to generic routing: {exc}")
+    return compile_mapping(
+        result,
+        hamiltonian,
+        backend,
+        optimization_level=cfg.backend.optimization_level,
+        initial_layout=cfg.backend.initial_layout,
+        physical_layout=mapping.physical_layout if result.is_routed else None,
+        seed_transpiler=cfg.seed,
     )
 
 
@@ -448,6 +530,20 @@ def _ideal_energy_fn(prep: Prepared) -> Callable[[FloatArray], float] | None:
         return float(estimator.evaluate(np.asarray(theta, dtype=float)[None, :]).energies[0])
 
     return ideal
+
+
+def _fidelity(prep: Prepared, theta: FloatArray) -> float | None:
+    """Ground-space fidelity of the noise-free state at ``theta`` (``None`` if not computable)."""
+    from qiskit.quantum_info import Statevector
+
+    try:
+        _, space = exact_ground_space(prep.hamiltonian)
+    except ValueError as exc:
+        log.warning("ground-space fidelity skipped: %s", exc)
+        return None
+    circuit = prep.ansatz.build()
+    state = Statevector(circuit.assign_parameters(np.asarray(theta, dtype=float)))
+    return ground_state_fidelity(state.data, space)
 
 
 def run_vqe(
@@ -544,6 +640,7 @@ def run_vqe(
         total_shots=int(total_shots),
         ideal_energy=None if ideal is None else ideal(opt.x),
         ideal_trace=ideal_trace,
+        ideal_fidelity=None if ideal is None else _fidelity(prep, np.asarray(opt.x, float)),
     )
     log.info(
         "%s finished: E_final=%.6f (exact %.6f, rel. err %.2e), %d evaluations in %.1fs",

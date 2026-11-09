@@ -1,0 +1,25 @@
+# 1. The original problem: 12-site Star of David, ring HVA (2 parameters per layer), exact
+# statevector. Identical to configs/statevector_hva_adam.toml; every field below is the default
+# behaviour, so older configs need no change.
+#   kagome-vqe run configs/examples/01_legacy_hva_unit_cell.toml
+name = "legacy_hva_unit_cell"
+seed = 42
+
+[lattice]
+kind = "kagome_unit_cell"          # site_order defaults to the Hamiltonian cycle for this kind
+
+[ansatz]
+type = "hva"
+reps = 1
+
+[optimizer]
+type = "adam"
+maxiter = 100
+lr = 0.01
+fd_eps = 1e-6
+
+[backend]
+kind = "statevector"
+
+[mapping]
+strategy = "generic"               # default: Qiskit layout/routing, the previous behaviour

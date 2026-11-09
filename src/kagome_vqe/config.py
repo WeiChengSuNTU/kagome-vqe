@@ -22,10 +22,22 @@ import numpy as np
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from kagome_vqe.ansatz import Ansatz, HVAnsatz, LibraryAnsatz, RVBAnsatz
+from kagome_vqe.ansatz import Ansatz, GraphHVAnsatz, HVAnsatz, LibraryAnsatz, RVBAnsatz
 from kagome_vqe.ansatz.base import ring_bonds
 from kagome_vqe.ansatz.unshare import ParameterMap
-from kagome_vqe.lattice import KAGOME_HAMILTONIAN_CYCLE, Lattice, kagome_unit_cell
+from kagome_vqe.kagome_lattices import (
+    custom_lattice,
+    kagome_bm_rectangle,
+    kagome_kvqe20,
+    kagome_patch,
+    kagome_periodic,
+)
+from kagome_vqe.lattice import (
+    KAGOME_HAMILTONIAN_CYCLE,
+    Lattice,
+    find_dimer_covering,
+    kagome_unit_cell,
+)
 from kagome_vqe.optimizers import (
     Adam,
     GradientDescent,
@@ -34,6 +46,7 @@ from kagome_vqe.optimizers import (
     Spsa,
     make_gradient,
 )
+from kagome_vqe.schedule import make_schedule
 
 __all__ = [
     "AnsatzConfig",
@@ -42,6 +55,8 @@ __all__ = [
     "BenchmarkConfig",
     "ComboConfig",
     "LatticeConfig",
+    "LatticeKind",
+    "MappingConfig",
     "MitigationConfig",
     "OptimizerConfig",
     "RescaleConfig",
@@ -79,54 +94,233 @@ class _Frozen(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid", validate_default=True)
 
 
+LatticeKind = Literal[
+    "kagome_unit_cell",
+    "kagome_patch",
+    "kagome_kvqe20",
+    "kagome_bm_rectangle",
+    "kagome_periodic",
+    "custom",
+]
+"""Lattice generators, see :mod:`kagome_vqe.kagome_lattices`.
+
+``kagome_unit_cell``
+    The 12-site star (default; the original problem).
+``kagome_patch``
+    Open patch on a ``rows x cols`` window of the triangular lattice (minus ``drop``).
+``kagome_kvqe20``
+    The 20-site open patch of PRB 106, Fig. 2.
+``kagome_bm_rectangle``
+    The kagome graph on a ``rows x cols`` qubit rectangle of the PRB 105 embedding.
+``kagome_periodic``
+    ``rows x cols`` torus of unit cells (``3 rows cols`` sites).
+``custom``
+    Explicit ``num_sites`` and ``bonds`` (optionally ``coords``, ``boundary``, ``dimers``).
+"""
+
+_SIZED_KINDS = ("kagome_patch", "kagome_bm_rectangle", "kagome_periodic")
+_CUSTOM_ONLY = ("num_sites", "bonds", "coords", "wrapped_bonds")
+
+
 class LatticeConfig(_Frozen):
     """Which spin graph to solve.
 
     Attributes:
-        kind: Only the 12-site kagome unit cell is shipped; the field exists so larger lattices
-            can be added without changing config files.
-        t: Exchange coupling on every bond.
-        site_order: How ansatz qubits map to lattice sites. ``"hamiltonian_cycle"`` (default)
-            makes the ring ansatzes exact; ``"identity"`` is the deliberately hard variant;
-            or an explicit permutation.
+        kind: Generator, see :data:`LatticeKind`.
+        t: Default exchange coupling (every bond of a generated lattice; two-element custom
+            bonds).
+        site_order: How ansatz qubits map to lattice sites. ``None`` (default) means
+            ``"hamiltonian_cycle"`` for the unit cell (which makes the ring ansatzes exact) and
+            ``"identity"`` otherwise; or an explicit permutation.
+        rows: Size for ``kagome_patch`` / ``kagome_bm_rectangle`` / ``kagome_periodic``.
+        cols: Size for the same kinds.
+        drop: ``kagome_patch`` only: coordinates ``[r, c]`` to leave out.
+        num_sites: ``custom`` only.
+        bonds: ``custom`` only: ``[a, b]`` or ``[a, b, J_ab]`` per bond.
+        coords: ``custom`` only: triangular-lattice coordinates ``[r, c]`` per site (needed by
+            the geometric mappings).
+        boundary: ``custom`` only (generated lattices know their boundary): ``"open"``,
+            ``"periodic"`` or ``"unspecified"``.
+        wrapped_bonds: ``custom`` only: bonds crossing a periodic boundary.
+        dimers: Reference dimer covering for ``graph_hva``: ``"default"`` (the generator's
+            covering if it has one, else the deterministic first perfect matching), ``"auto"``
+            (always the deterministic first perfect matching) or explicit ``[a, b]`` pairs.
     """
 
-    kind: Literal["kagome_unit_cell"] = "kagome_unit_cell"
+    kind: LatticeKind = "kagome_unit_cell"
     t: float = 1.0
-    site_order: Literal["hamiltonian_cycle", "identity"] | list[int] = "hamiltonian_cycle"
+    site_order: Literal["hamiltonian_cycle", "identity"] | list[int] | None = None
+    rows: Annotated[int, Field(ge=1)] | None = None
+    cols: Annotated[int, Field(ge=1)] | None = None
+    drop: list[tuple[int, int]] = Field(default_factory=list)
+    num_sites: Annotated[int, Field(ge=1)] | None = None
+    bonds: list[list[float]] | None = None
+    coords: list[tuple[int, int]] | None = None
+    boundary: Literal["open", "periodic", "unspecified"] | None = None
+    wrapped_bonds: list[tuple[int, int]] = Field(default_factory=list)
+    dimers: Literal["default", "auto"] | list[tuple[int, int]] = "default"
+
+    @model_validator(mode="after")
+    def _fields_fit_kind(self) -> Self:
+        if self.kind in _SIZED_KINDS and (self.rows is None or self.cols is None):
+            msg = f"lattice.kind={self.kind!r} needs lattice.rows and lattice.cols"
+            raise ValueError(msg)
+        if self.kind not in _SIZED_KINDS and (self.rows is not None or self.cols is not None):
+            msg = f"lattice.rows/cols do not apply to kind={self.kind!r}"
+            raise ValueError(msg)
+        if self.drop and self.kind != "kagome_patch":
+            msg = "lattice.drop only applies to kind='kagome_patch'"
+            raise ValueError(msg)
+        if self.kind == "custom":
+            if self.num_sites is None or self.bonds is None:
+                msg = "lattice.kind='custom' needs lattice.num_sites and lattice.bonds"
+                raise ValueError(msg)
+        else:
+            given = [f for f in _CUSTOM_ONLY if getattr(self, f) not in (None, [])]
+            if given or self.boundary is not None:
+                extra = given + (["boundary"] if self.boundary is not None else [])
+                msg = f"lattice fields {extra} only apply to kind='custom'"
+                raise ValueError(msg)
+        if self.site_order == "hamiltonian_cycle" and self.kind != "kagome_unit_cell":
+            msg = "site_order='hamiltonian_cycle' is only defined for the kagome unit cell"
+            raise ValueError(msg)
+        return self
+
+    def _generate(self) -> Lattice:
+        if self.kind == "kagome_unit_cell":
+            return kagome_unit_cell(self.t, site_order=None)
+        if self.kind == "kagome_kvqe20":
+            return kagome_kvqe20(self.t)
+        if self.kind == "custom":
+            assert self.num_sites is not None
+            assert self.bonds is not None
+            return custom_lattice(
+                self.num_sites,
+                self.bonds,
+                coupling=self.t,
+                coords=self.coords,
+                boundary=self.boundary or "unspecified",
+                wrapped_bonds=self.wrapped_bonds,
+            )
+        assert self.rows is not None
+        assert self.cols is not None
+        if self.kind == "kagome_patch":
+            return kagome_patch(self.rows, self.cols, self.t, drop=self.drop)
+        if self.kind == "kagome_bm_rectangle":
+            return kagome_bm_rectangle(self.rows, self.cols, self.t)
+        return kagome_periodic(self.rows, self.cols, self.t)
 
     def build(self) -> Lattice:
-        """Construct the lattice."""
-        if self.site_order == "hamiltonian_cycle":
-            order: tuple[int, ...] | None = KAGOME_HAMILTONIAN_CYCLE
+        """Construct and validate the lattice (site order and dimers applied)."""
+        lattice = self._generate()
+        if self.site_order is None:
+            order = KAGOME_HAMILTONIAN_CYCLE if self.kind == "kagome_unit_cell" else None
+        elif self.site_order == "hamiltonian_cycle":
+            order = KAGOME_HAMILTONIAN_CYCLE
         elif self.site_order == "identity":
             order = None
         else:
             order = tuple(self.site_order)
-        return kagome_unit_cell(self.t, site_order=order)
+        lattice = lattice.with_site_order(order)
+        if self.dimers == "auto":
+            lattice = lattice.with_dimers(find_dimer_covering(lattice))
+        elif self.dimers != "default":
+            lattice = lattice.with_dimers([(int(a), int(b)) for a, b in self.dimers])
+        return lattice
+
+
+_GRAPH_HVA_ONLY = (
+    "parameterization",
+    "include_h0",
+    "h0_position",
+    "prune_phase_gates",
+    "schedule",
+    "layers",
+    "layer_order",
+)
+_GRAPH_HVA_DEFAULTS: dict[str, Any] = {
+    "parameterization": "opg",
+    "include_h0": False,
+    "h0_position": "end",
+    "prune_phase_gates": False,
+    "schedule": "greedy",
+    "layers": None,
+    "layer_order": None,
+}
 
 
 class AnsatzConfig(_Frozen):
     """Which trial circuit to use.
 
     Attributes:
-        type: ``"rvb"``, ``"hva"``, ``"real_amplitudes"`` or ``"efficient_su2"``.
-        reps: Number of layers.
+        type: ``"rvb"``, ``"hva"`` (ring ansatzes), ``"graph_hva"`` (graph-based HVA),
+            ``"real_amplitudes"`` or ``"efficient_su2"``.
+        reps: Number of layers / HVA cycles ``p``.
         gate: RVB only: ``"pauli_evolution"`` (true eSWAP) or ``"legacy"`` (original gate).
         lattice_aware: HVA only: add a third sub-layer on the lattice bonds that are not on
             the ansatz ring.
         entanglement: Library ansatzes only: Qiskit entanglement pattern.
+        parameterization: graph_hva: ``"opg"`` (one parameter per gate, default) or
+            ``"per_layer"`` (one per schedule layer and cycle, explicit sharing).
+        include_h0: graph_hva: add an independently parameterised H0 evolution per cycle.
+        h0_position: graph_hva: ``"end"`` (default; PRB 105 Eq. (4) read as an operator
+            product) or ``"start"`` of each cycle. At the start of cycle 1 it is a pure phase.
+        prune_phase_gates: graph_hva: drop gates that only add a global phase.
+        schedule: graph_hva gate order: ``"greedy"``, ``"prb105"``, ``"prb105_fig3"``,
+            ``"prb106"`` or ``"explicit"`` (see :mod:`kagome_vqe.schedule`).
+        layers: graph_hva with ``schedule = "explicit"``: bond layers in site labels.
+        layer_order: graph_hva: optional permutation applied to the schedule's layers.
     """
 
-    type: Literal["rvb", "hva", "real_amplitudes", "efficient_su2"] = "hva"
+    type: Literal["rvb", "hva", "graph_hva", "real_amplitudes", "efficient_su2"] = "hva"
     reps: Annotated[int, Field(ge=1)] = 1
     gate: Literal["pauli_evolution", "legacy"] = "pauli_evolution"
     lattice_aware: bool = False
     entanglement: str = "reverse_linear"
+    parameterization: Literal["opg", "per_layer"] = "opg"
+    include_h0: bool = False
+    h0_position: Literal["start", "end"] = "end"
+    prune_phase_gates: bool = False
+    schedule: Literal["greedy", "prb105", "prb105_fig3", "prb106", "explicit"] = "greedy"
+    layers: list[list[tuple[int, int]]] | None = None
+    layer_order: list[int] | None = None
+
+    @model_validator(mode="after")
+    def _graph_options(self) -> Self:
+        if self.type != "graph_hva":
+            changed = [f for f in _GRAPH_HVA_ONLY if getattr(self, f) != _GRAPH_HVA_DEFAULTS[f]]
+            if changed:
+                msg = f"ansatz fields {changed} only apply to type='graph_hva'"
+                raise ValueError(msg)
+        if (self.schedule == "explicit") != (self.layers is not None):
+            msg = "ansatz.layers is required for, and only allowed with, schedule='explicit'"
+            raise ValueError(msg)
+        return self
 
     def build(self, lattice: Lattice) -> Ansatz:
         """Construct the ansatz for ``lattice.num_sites`` qubits."""
         n = lattice.num_sites
+        if self.type == "graph_hva":
+            dimers = lattice.dimers if lattice.dimers is not None else find_dimer_covering(lattice)
+            schedule = make_schedule(
+                lattice,
+                self.schedule,
+                dimers=dimers,
+                layers=self.layers,
+                include_h0=self.include_h0,
+            )
+            if self.layer_order is not None:
+                schedule = schedule.reordered(self.layer_order)
+            return GraphHVAnsatz(
+                lattice,
+                self.reps,
+                schedule=schedule,
+                dimers=dimers,
+                include_h0=self.include_h0,
+                h0_position=self.h0_position,
+                parameterization=self.parameterization,
+                prune_phase_gates=self.prune_phase_gates,
+            )
         if self.type == "rvb":
             return RVBAnsatz(n, self.reps, gate=self.gate)
         if self.type == "hva":
@@ -139,6 +333,45 @@ class AnsatzConfig(_Frozen):
                 ]
             return HVAnsatz(n, self.reps, extra_bonds=extra)
         return LibraryAnsatz(self.type, n, self.reps, self.entanglement)
+
+
+class MappingConfig(_Frozen):
+    """How the logical circuit is embedded into hardware connectivity.
+
+    Attributes:
+        strategy: ``"generic"`` (default: Qiskit layout + SABRE routing, exactly the previous
+            behaviour for the ring ansatzes), ``"prb105"`` (Bosse-Montanaro square-grid
+            embedding) or ``"prb106_grid"`` (Kattemolle-van Wezel grid with swapping stations).
+            See :mod:`kagome_vqe.mapping.strategies`.
+        fallback: ``"error"`` (default) fails when a geometric strategy does not apply (no
+            coordinates, periodic boundary, no fit on the device); ``"generic"`` falls back to
+            Qiskit routing and records ``status = "generic_fallback"``.
+        physical_layout: Geometric strategies: hardware qubit per routed-circuit qubit
+            (order of ``mapping.grid_positions`` in a dry run); ``None`` searches the coupling
+            map and picks the embedding with the lowest calibrated error.
+        restore_at_end: Undo outstanding SWAPs at the end (identity final permutation).
+        merge_swaps: Fold a SWAP into an adjacent exchange gate on the same pair.
+        exchange_synthesis: ``"cx3"`` (3-CNOT Heisenberg gate, default) or ``"rotations"``
+            (``rzz ryy rxx``, two CNOTs each).
+    """
+
+    strategy: Literal["generic", "prb105", "prb106_grid"] = "generic"
+    fallback: Literal["error", "generic"] = "error"
+    physical_layout: list[int] | None = None
+    restore_at_end: bool = False
+    merge_swaps: bool = True
+    exchange_synthesis: Literal["cx3", "rotations"] = "cx3"
+
+    @model_validator(mode="after")
+    def _layout_needs_geometry(self) -> Self:
+        if self.physical_layout is not None and self.strategy == "generic":
+            msg = "mapping.physical_layout is for geometric strategies; use backend.initial_layout"
+            raise ValueError(msg)
+        return self
+
+    def label(self) -> str:
+        """Short name for file names."""
+        return self.strategy
 
 
 class OptimizerConfig(_Frozen):
@@ -411,14 +644,18 @@ class RunConfig(_Frozen):
     record_params: bool = True
     track_ideal_energy: bool = True
     mitigation: MitigationConfig = MitigationConfig()
+    mapping: MappingConfig = MappingConfig()
 
     @model_validator(mode="after")
     def _mitigation_fits(self) -> Self:
         if self.mitigation.enabled and self.backend.kind == "statevector":
             msg = "mitigation needs a shot-based backend; statevector energies are exact"
             raise ValueError(msg)
-        if self.mitigation.symmetry and self.ansatz.type not in ("rvb", "hva"):
-            msg = "symmetry filtering assumes a total-spin singlet ansatz (rvb or hva)"
+        if self.mitigation.symmetry and self.ansatz.type not in ("rvb", "hva", "graph_hva"):
+            msg = "symmetry filtering assumes a total-spin singlet ansatz (rvb, hva or graph_hva)"
+            raise ValueError(msg)
+        if self.mapping.strategy != "generic" and self.backend.initial_layout is not None:
+            msg = "backend.initial_layout is for generic routing; use mapping.physical_layout"
             raise ValueError(msg)
         return self
 
@@ -453,10 +690,16 @@ class ComboConfig(_Frozen):
     label: str | None = None
     shots: Annotated[int, Field(ge=1)] | None = None
     mitigation: MitigationConfig | None = None
+    mapping: MappingConfig | None = None
 
     def name(self) -> str:
-        """``label`` or ``"<ansatz>_<optimizer label>"``."""
-        return self.label or f"{self.ansatz.type}_{self.optimizer.label()}"
+        """``label`` or ``"<ansatz>_<optimizer label>"`` (plus the mapping if not generic)."""
+        if self.label:
+            return self.label
+        base = f"{self.ansatz.type}_{self.optimizer.label()}"
+        if self.mapping is not None and self.mapping.strategy != "generic":
+            base += f"_{self.mapping.strategy}"
+        return base
 
 
 def _paper_combos() -> list[ComboConfig]:
@@ -490,6 +733,7 @@ class BenchmarkConfig(_Frozen):
     record_params: bool = False
     track_ideal_energy: bool = True
     mitigation: MitigationConfig = MitigationConfig()
+    mapping: MappingConfig = MappingConfig()
     combos: list[ComboConfig] = Field(default_factory=_paper_combos)
 
     def run_configs(self) -> list[RunConfig]:
@@ -517,6 +761,7 @@ class BenchmarkConfig(_Frozen):
                         record_params=self.record_params,
                         track_ideal_energy=self.track_ideal_energy,
                         mitigation=combo.mitigation or self.mitigation,
+                        mapping=combo.mapping or self.mapping,
                     )
                 )
         return runs

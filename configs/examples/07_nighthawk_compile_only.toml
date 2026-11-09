@@ -1,0 +1,27 @@
+# 7. IBM Nighthawk compilation-only benchmark: compile the same logical circuit with PRB 105,
+# PRB 106 and generic routing and tabulate qubits, SWAPs, native CZ count and depth. Nothing
+# is executed.
+#   kagome-vqe map configs/examples/07_nighthawk_compile_only.toml
+# Against the real device's Target (needs IBM credentials; still compile-only, no job):
+#   kagome-vqe map configs/examples/07_nighthawk_compile_only.toml -b ibm:ibm_phoenix
+# Against a Heron heavy-hex device (the grid strategies are reported as unsupported there):
+#   kagome-vqe map configs/examples/07_nighthawk_compile_only.toml -b aer_noisy:FakeBoston
+name = "nighthawk_mapping_kvqe20"
+seed = 11
+
+[lattice]
+kind = "kagome_kvqe20"
+
+[ansatz]
+type = "graph_hva"
+reps = 2
+schedule = "prb106"
+
+[backend]
+kind = "aer_noisy"
+name = "FakeNighthawk"
+shots = 4096
+optimization_level = 3
+
+[mapping]
+fallback = "error"                 # an inapplicable strategy is listed as "unsupported"

@@ -1,0 +1,29 @@
+# 6. Generic routing: no geometric embedding. Exchange gates are synthesised with 3 CNOTs and
+# Qiskit's preset pass manager does layout and SABRE routing. Works for any graph, including
+# periodic lattices (here the 12-site torus) and heavy-hex devices.
+#   kagome-vqe run configs/examples/06_mapping_generic.toml --dry-run
+#   kagome-vqe run configs/examples/06_mapping_generic.toml -b aer_noisy:FakeBoston --dry-run
+name = "generic_torus2x2_nighthawk"
+seed = 11
+
+[lattice]
+kind = "kagome_periodic"
+rows = 2
+cols = 2
+
+[ansatz]
+type = "graph_hva"
+reps = 1
+
+[optimizer]
+type = "spsa"
+maxiter = 50
+
+[backend]
+kind = "aer_noisy"
+name = "FakeNighthawk"
+shots = 4096
+optimization_level = 3
+
+[mapping]
+strategy = "generic"

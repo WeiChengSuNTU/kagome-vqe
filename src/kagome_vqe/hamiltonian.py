@@ -19,9 +19,14 @@ from qiskit.quantum_info import SparsePauliOp
 
 from kagome_vqe.lattice import Lattice
 
+_DENSE_MAX_DIM = 2**10
+"""Up to 10 qubits the ground space is computed by dense diagonalisation (exact, fast)."""
+
 __all__ = [
     "exact_ground_energy",
+    "exact_ground_space",
     "exact_spectrum",
+    "ground_state_fidelity",
     "heisenberg_hamiltonian",
     "relative_error",
 ]
@@ -78,3 +83,49 @@ def relative_error(target: float, value: float) -> float:
         msg = "relative error is undefined for a zero target"
         raise ZeroDivisionError(msg)
     return abs((target - value) / target)
+
+
+def exact_ground_space(
+    hamiltonian: SparsePauliOp, *, k: int = 6, tol: float = 1e-8
+) -> tuple[float, np.ndarray]:
+    """Ground energy and an orthonormal basis of the (possibly degenerate) ground space.
+
+    Args:
+        hamiltonian: The operator.
+        k: Eigenpairs to compute; the ground space is assumed to be at most ``k - 1`` fold
+            degenerate (a warning-free check: if all ``k`` are degenerate, ``k`` is too small).
+        tol: Energies within ``tol`` of the minimum count as degenerate.
+
+    Returns:
+        ``(E0, V)`` with ``V`` of shape ``(2**n, d)``.
+
+    Raises:
+        ValueError: If all ``k`` computed eigenvalues are degenerate.
+    """
+    matrix = hamiltonian.to_matrix(sparse=True)
+    dim = matrix.shape[0]
+    if dim <= _DENSE_MAX_DIM:
+        values, vectors = np.linalg.eigh(matrix.toarray())
+        values, vectors = values[:k], vectors[:, :k]
+    else:
+        values, vectors = spla.eigsh(matrix, k=k, which="SA", tol=1e-12, ncv=max(4 * k, 40))
+    order = np.argsort(values)
+    values, vectors = np.real(values[order]), vectors[:, order]
+    degenerate = values - values[0] < tol
+    if degenerate.all() and k < dim:
+        msg = f"all {k} lowest eigenvalues are degenerate; increase k"
+        raise ValueError(msg)
+    # Lanczos returns degenerate eigenvectors that are only approximately orthogonal (overlaps
+    # ~1e-3 were observed), which would make the projector, and fidelities, wrong.
+    basis, _ = np.linalg.qr(vectors[:, degenerate])
+    residual = np.linalg.norm(matrix @ basis - values[0] * basis, axis=0).max()
+    if residual > 1e-6:
+        msg = f"ground space not converged (residual {residual:.1e})"
+        raise ValueError(msg)
+    return float(values[0]), basis
+
+
+def ground_state_fidelity(state: np.ndarray, ground_space: np.ndarray) -> float:
+    """``sum_k |<E0_k|psi>|^2``: overlap of ``state`` with the (degenerate) ground space."""
+    overlaps = ground_space.conj().T @ np.asarray(state)
+    return float(np.sum(np.abs(overlaps) ** 2))

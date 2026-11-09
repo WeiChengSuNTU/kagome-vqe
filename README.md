@@ -1,7 +1,11 @@
 # kagome-vqe
 
 Variational quantum eigensolver (VQE) for the spin-1/2 Heisenberg antiferromagnet on the
-12-site kagome unit cell, built on Qiskit 2.x and ready for IBM Quantum hardware.
+kagome lattice, built on Qiskit 2.x and ready for IBM Quantum hardware. The original target is
+the 12-site kagome unit cell; configurable lattices (open patches, periodic tori, custom
+graphs), a graph-based Hamiltonian variational ansatz with one parameter per gate, and two
+paper-based hardware mappings for square-grid devices extend it
+(see [Generalised lattices and hardware mapping](#generalised-lattices-and-hardware-mapping)).
 
 The package rebuilds the IBM Quantum Open Science Prize 2022 kagome challenge, and the
 resonating-valence-bond (RVB) and Hamiltonian-variational (HVA) ansatz comparison from
@@ -15,10 +19,10 @@ The code is a pipeline whose stages map one-to-one onto modules in `src/kagome_v
 
 | stage | module | responsibility |
 |---|---|---|
-| 1 | `lattice.py` | the spin graph (sites, bonds, and which ansatz qubit hosts which site) |
-| 2 | `hamiltonian.py` | the graph as a `SparsePauliOp`; exact diagonalisation for reference energies |
-| 3 | `ansatz/` | parameterised trial circuits: `RVBAnsatz`, `HVAnsatz`, library wrappers |
-| 4 | `transpile.py` | compile circuit + observable for a backend (`observable.apply_layout`) |
+| 1 | `lattice.py`, `kagome_lattices.py` | the spin graph (sites, bonds, couplings, optional coordinates, boundary, dimer covering) and its generators |
+| 2 | `hamiltonian.py` | the graph as a `SparsePauliOp`; exact diagonalisation for reference energies and ground-state fidelity |
+| 3 | `schedule.py`, `ansatz/` | gate schedules; trial circuits: `RVBAnsatz`, `HVAnsatz`, `GraphHVAnsatz`, library wrappers |
+| 4 | `mapping/`, `transpile.py` | embed the logical circuit into hardware connectivity (PRB 105, PRB 106 or Qiskit routing) and compile circuit + observable for a backend |
 | 5 | `estimators.py` | evaluate energies on statevector, Aer, fake backends or IBM Quantum |
 | 6 | `optimizers/` | classical minimisers: in-repo ADAM and SPSA, scipy wrapper |
 | 7 | `vqe.py` | the loop that ties 3-6 together and records every evaluation |
@@ -76,6 +80,144 @@ ten times the real spread for this Hamiltonian.
 Whatever the backend, the ansatz is transpiled with `generate_preset_pass_manager` and the
 Hamiltonian is moved onto the chosen physical qubits with `observable.apply_layout`, so the
 energy is the same as on the logical circuit up to noise. This is verified in the test suite.
+
+## Generalised lattices and hardware mapping
+
+Everything in this section is additive. The ring ansatzes and all existing configs behave as
+before, and `[mapping] strategy = "generic"` (the default) is the old transpiler path. The full
+description, with conventions, paper cross-checks and limitations, is in
+[`docs/graph_hva.md`](docs/graph_hva.md).
+
+**Lattices.** `[lattice] kind` is one of `kagome_unit_cell` (default),
+`kagome_kvqe20` (20-site patch of PRB 106), `kagome_bm_rectangle` (`rows x cols` lattices of
+PRB 105), `kagome_patch` (any window of the triangular lattice), `kagome_periodic`
+(`rows x cols` torus) or `custom` (explicit `num_sites` and `bonds = [[a, b], [a, b, J], ...]`).
+Optional `coords`, `boundary` and `dimers` are also accepted. Lattices are validated: no
+duplicate or self bonds, connected, and a dimer covering must be a perfect matching of bonds.
+The site count never implies a geometry.
+
+**Graph-based HVA** (`[ansatz] type = "graph_hva"`). Singlets on a dimer covering, then
+`reps` cycles of SU(2)-symmetric exchange gates `exp(-i theta/2 (XX + YY + ZZ))` on the actual
+bonds. The gates are grouped by a deterministic edge colouring or by a paper schedule
+(`schedule = "greedy" | "prb105" | "prb105_fig3" | "prb106" | "explicit"`). With one parameter
+per gate (OPG, the default), `N_theta = p * N_b`. `include_h0 = true` adds an independently
+parameterised H0 evolution per cycle (PRB 105 "per edge"), giving `p * (N_b + 1)`. Gates
+that only add a global phase, and H0 parameters that fuse with bond gates, are detected and
+reported. `prune_phase_gates = true` removes the former.
+
+**Mapping** (`[mapping] strategy`):
+
+| strategy | construction | auxiliary qubits | supports |
+|---|---|---|---|
+| `prb105` | Bosse & Montanaro square-grid embedding; one SWAP layer before and one after the `H4`/`H5` bonds, 7 layers per cycle | none | open patches with coordinates; `paper_exact` on the PRB 105 rectangles |
+| `prb106_grid` | Kattemolle & van Wezel KVQE_G; hexagon centres act as swapping stations, 6 layers per cycle | one per three sites (in `|0>`) | open patches with coordinates; `paper_exact` on the 20-site patch |
+| `generic` | 3-CNOT exchange synthesis + Qiskit layout and SABRE routing | none | any graph, any device |
+
+A strategy never substitutes generic routing silently: with `fallback = "error"` (default)
+an inapplicable strategy fails with the reason. Inapplicable cases are periodic lattices, no
+coordinates, or a device where the grid does not fit, such as heavy-hex Heron. With
+`fallback = "generic"` the result is labelled `generic_fallback`. The routed grid is
+placed on the device by subgraph matching against the real coupling map, preferring
+low-error couplers, and `physical_layout` can fix the placement. Routed circuits are
+verified against the logical circuit in noiseless simulation, including the final qubit
+permutation and auxiliary qubits returning to `|0>`.
+
+Example configs (`configs/examples/`):
+
+```bash
+uv run kagome-vqe run configs/examples/01_legacy_hva_unit_cell.toml          # 1. original 12-site ring HVA
+uv run kagome-vqe run configs/examples/02_graph_hva_no_h0.toml               # 2. graph_hva, no H0 (12-site torus)
+uv run kagome-vqe run configs/examples/03_graph_hva_with_h0.toml             # 3. graph_hva with H0 (PRB 105 2x6)
+uv run kagome-vqe run configs/examples/04_mapping_prb105.toml --dry-run      # 4. PRB 105 mapping on FakeNighthawk
+uv run kagome-vqe run configs/examples/05_mapping_prb106.toml --dry-run      # 5. PRB 106 mapping on FakeNighthawk
+uv run kagome-vqe run configs/examples/06_mapping_generic.toml --dry-run     # 6. generic routing
+uv run kagome-vqe map configs/examples/07_nighthawk_compile_only.toml        # 7. Nighthawk compile-only comparison
+uv run kagome-vqe map configs/examples/07_nighthawk_compile_only.toml -b ibm:ibm_phoenix   # real Target, no job
+uv run kagome-vqe lattice configs/examples/08_custom_graph.toml --plot lattice.png        # describe / draw a lattice
+uv run kagome-vqe exact --config configs/examples/02_graph_hva_no_h0.toml    # exact spectrum of any configured lattice
+uv run kagome-vqe benchmark configs/examples/09_benchmark_graph_hva.toml     # graph_hva vs ring HVA
+```
+
+`kagome-vqe map` and `run --dry-run` only compile. For `-b ibm:...` they fetch the device
+`Target` but never submit a job.
+
+<!-- GRAPH_HVA_BENCHMARKS -->
+### graph_hva benchmarks
+
+**VQE on the exact simulator** (`statevector`, L-BFGS-B, 400 iterations, initial parameters
+uniform in `[0, 0.1)`, seeds 1 and 2; driver: `benchmarks/graph_hva_vqe_sweep.py`). The relative error is
+for the lowest final energy. The fidelity is the overlap with the exact, possibly degenerate,
+ground space from exact diagonalisation. Schedules: `greedy` for the star and the torus,
+`prb105` for the 2x6 rectangle; H0 at the end of each cycle.
+
+| lattice | H0 | p | parameters | best rel. error | best fidelity | seeds |
+|---|---|---|---|---|---|---|
+| 12-site star (open) | no | 1 | 18 | 1.57e-09 | 1.0000 | 2 |
+| 12-site star (open) | yes | 1 | 19 | 6.65e-08 | 1.0000 | 2 |
+| PRB 105 2x6 rectangle (open) | no | 1 | 16 | 7.19e-02 | 0.5105 | 2 |
+| PRB 105 2x6 rectangle (open) | no | 2 | 32 | 1.26e-02 | 0.7556 | 2 |
+| PRB 105 2x6 rectangle (open) | no | 3 | 48 | 1.65e-03 | 0.9957 | 2 |
+| PRB 105 2x6 rectangle (open) | no | 4 | 64 | 4.87e-04 | 0.9987 | 2 |
+| PRB 105 2x6 rectangle (open) | yes | 1 | 17 | 2.29e-02 | 0.7068 | 2 |
+| PRB 105 2x6 rectangle (open) | yes | 2 | 34 | 6.48e-03 | 0.9789 | 2 |
+| PRB 105 2x6 rectangle (open) | yes | 3 | 51 | 6.89e-04 | 0.9981 | 2 |
+| PRB 105 2x6 rectangle (open) | yes | 4 | 68 | 5.07e-04 | 0.9985 | 2 |
+| 12-site torus (periodic) | no | 1 | 24 | 4.53e-02 | 0.2071 | 2 |
+| 12-site torus (periodic) | no | 2 | 48 | 3.15e-02 | 0.4221 | 2 |
+| 12-site torus (periodic) | no | 3 | 72 | 1.94e-02 | 0.5174 | 2 |
+| 12-site torus (periodic) | no | 4 | 96 | 1.63e-02 | 0.5457 | 2 |
+| 12-site torus (periodic) | yes | 1 | 25 | 4.90e-02 | 0.2931 | 2 |
+| 12-site torus (periodic) | yes | 2 | 50 | 2.68e-02 | 0.4451 | 2 |
+| 12-site torus (periodic) | yes | 3 | 75 | 2.06e-02 | 0.5199 | 2 |
+| 12-site torus (periodic) | yes | 4 | 100 | 1.36e-02 | 0.5875 | 2 |
+
+The open lattices converge systematically with depth. On the PRB 105 2x6 rectangle the extra
+H0 parameter helps at small `p` (F = 0.98 versus 0.76 at `p = 2`). For the star the reference
+state is already exact, so it is a correctness check, not a test. The periodic 12-site torus is
+much harder: at `p = 4` the optimiser stops at 1.4-1.6 % error with F = 0.55-0.59.
+That is consistent with the energy-fidelity bound (gap 0.466), and it is a statement about
+expressiveness and optimisation at this depth, not about circuit correctness. Correctness is
+established separately by the routing-equivalence tests.
+
+**Hardware mapping, compile only** (`kagome-vqe map`, `graph_hva` with `p = 2`, no H0,
+optimisation level 3, seed 11; SWAPs for `generic` are those SABRE inserts at level 1;
+"block 2q depth" counts exchange and SWAP gates as one layer each, the papers' convention):
+
+PRB 106 20-site patch (`schedule = "prb106"`) on FakeNighthawk:
+
+| strategy | status | physical qubits | auxiliary | SWAPs | block 2q depth | CZ gates | CZ depth | total depth |
+|---|---|---|---|---|---|---|---|---|
+| prb105 | paper_inspired | 24 | 4 | 40 | 19 | 295 | 55 | 210 |
+| prb106_grid | paper_exact | 24 | 4 | 32 | 15 | 286 | 43 | 183 |
+| generic | generic | 20 | 0 | 29 | - | 237 | 63 | 259 |
+
+PRB 105 3x8 rectangle (`schedule = "prb105"`) on FakeNighthawk:
+
+| strategy | status | physical qubits | auxiliary | SWAPs | block 2q depth | CZ gates | CZ depth | total depth |
+|---|---|---|---|---|---|---|---|---|
+| prb105 | paper_exact | 24 | 0 | 28 | 15 | 292 | 43 | 174 |
+| prb106_grid | paper_inspired | 33 | 9 | 52 | 19 | 396 | 55 | 189 |
+| generic | generic | 25 | 0 | 38 | - | 318 | 76 | 287 |
+
+12-site star (`schedule = "greedy"`) on FakeNighthawk:
+
+| strategy | status | physical qubits | auxiliary | SWAPs | block 2q depth | CZ gates | CZ depth | total depth |
+|---|---|---|---|---|---|---|---|---|
+| prb105 | paper_inspired | 13 | 1 | 22 | 24 | 171 | 62 | 228 |
+| prb106_grid | paper_inspired | 17 | 5 | 26 | 17 | 192 | 49 | 172 |
+| generic | generic | 12 | 0 | 17 | - | 136 | 35 | 147 |
+
+PRB 106 20-site patch on FakeBoston (Heron, heavy-hex): `prb105` and `prb106_grid` are reported
+`unsupported`, because the routed grid does not embed in the coupling map. `generic` needs
+22 qubits, 66 SWAPs and 327 CZ gates at CZ depth 93.
+
+Each paper's own construction is the shallowest option on its own lattice. On the 20-site
+patch, `prb106_grid` gives CZ depth 43 against 63 for generic routing; on the 3x8 rectangle,
+`prb105` gives 43 against 76. Generic routing still uses fewer CZ gates on the 20-site patch
+(237 against 286), because it needs no stations. On the small star, generic routing wins
+outright. None of the strategies is better everywhere; which one is best depends on the
+lattice, the device and whether depth or gate count limits fidelity.
+<!-- /GRAPH_HVA_BENCHMARKS -->
 
 ## Optimisers and gradients
 
@@ -334,7 +476,7 @@ mitigation, subspace methods such as QSE and Krylov diagonalisation) and the mil
   available with `ansatz.gate = "legacy"`.
 
 The full story, including the layout analysis of the legacy 16-qubit lattice, is in
-[`docs/physics.md`](docs/physics.md).
+[`docs/physics.md`](docs/physics.md). Lattices beyond the 12-site cell, the graph-based HVA and the hardware mappings are covered in [`docs/graph_hva.md`](docs/graph_hva.md).
 
 ## Running on IBM Quantum
 
@@ -372,6 +514,12 @@ suite on Python 3.12, 3.13 and 3.14. Code conventions are in
 
 * A. W. Shaffar, A. A. Hakim, H. Jung and H. Shin, "Comparative Analysis of Variational
   Ansatzes in the Kagome Heisenberg Antiferromagnet", KICS Fall Conference 2023, pp. 106-107.
+* J. L. Bosse and A. Montanaro, "Probing ground-state properties of the kagome
+  antiferromagnetic Heisenberg model using the variational quantum eigensolver",
+  Phys. Rev. B 105, 094409 (2022): `prb105` mapping and schedule, per-edge ansatz with H0.
+* J. Kattemolle and J. van Wezel, "Variational quantum eigensolver for the Heisenberg
+  antiferromagnet on the kagome lattice", Phys. Rev. B 106, 214429 (2022): `prb106_grid`
+  mapping, KVQE_G schedule and 20-site patch, one parameter per gate.
 * IBM Quantum Open Science Prize 2022:
   <https://github.com/qiskit-community/open-science-prize-2022>.
 

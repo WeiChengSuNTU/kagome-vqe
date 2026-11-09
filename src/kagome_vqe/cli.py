@@ -2,7 +2,9 @@
 
 Commands::
 
-    kagome-vqe exact                      exact spectrum of the kagome Hamiltonian
+    kagome-vqe exact [--config CONFIG]    exact spectrum of the kagome Hamiltonian
+    kagome-vqe lattice CONFIG [--plot P]  describe (and draw) a configured lattice
+    kagome-vqe map CONFIG                 compile-only comparison of hardware mappings
     kagome-vqe run CONFIG [--dry-run]     one VQE run from a TOML config
     kagome-vqe benchmark [CONFIG]         RVB/HVA x ADAM/SPSA on one backend
     kagome-vqe plot RESULTS_DIR...        convergence figure from saved runs
@@ -97,28 +99,120 @@ def _print_json(data: Any) -> None:
 @app.command()
 def exact(
     k: Annotated[int, typer.Option(help="How many eigenvalues.")] = 3,
-    t: Annotated[float, typer.Option(help="Exchange coupling.")] = 1.0,
+    t: Annotated[float, typer.Option(help="Exchange coupling (unit cell only).")] = 1.0,
+    config: Annotated[
+        Path | None,
+        typer.Option(help="Run config TOML whose [lattice] to diagonalise.", dir_okay=False),
+    ] = None,
+    set_: SetOption = None,
 ) -> None:
-    """Exact diagonalisation of the 12-site kagome Heisenberg Hamiltonian."""
+    """Exact diagonalisation of the 12-site kagome cell, or of a configured lattice."""
     import numpy as np
 
     from kagome_vqe.hamiltonian import exact_spectrum, heisenberg_hamiltonian
-    from kagome_vqe.lattice import kagome_unit_cell, perfect_matchings
+    from kagome_vqe.lattice import count_dimer_coverings, kagome_unit_cell
 
-    lattice = kagome_unit_cell(t)
+    if config is None:
+        lattice = kagome_unit_cell(t)
+    else:
+        lattice = RunConfig.model_validate(_load(config, set_, None)).lattice.build()
     hamiltonian = heisenberg_hamiltonian(lattice)
     spectrum = exact_spectrum(hamiltonian, k=k)
     degeneracy = int(np.sum(np.isclose(spectrum, spectrum[0], atol=1e-8)))
-    table = Table(title="Kagome unit cell, H = t * sum_<ij> (XX + YY + ZZ)")
+    table = Table(title=f"{lattice.name}, H = sum_<ij> J_ij (XX + YY + ZZ)")
     table.add_column("quantity")
     table.add_column("value")
     table.add_row("sites / bonds", f"{lattice.num_sites} / {lattice.num_bonds}")
+    table.add_row("boundary", lattice.boundary)
     table.add_row("Pauli terms", str(len(hamiltonian)))
     table.add_row("lowest eigenvalues", ", ".join(f"{v:.8f}" for v in spectrum))
+    table.add_row("E0 per site (S.S units)", f"{spectrum[0] / 4 / lattice.num_sites:.6f}")
     table.add_row("ground-state degeneracy", str(degeneracy))
-    table.add_row("dimer coverings", str(len(perfect_matchings(lattice))))
-    table.add_row("dimer-product energy", f"{-3 * t * lattice.num_sites / 2:.4f}")
+    if lattice.num_sites % 2 == 0:
+        coverings = count_dimer_coverings(lattice)
+        table.add_row("dimer coverings", str(coverings))
+        if coverings:
+            table.add_row("dimer-product energy", f"{-3 * t * lattice.num_sites / 2:.4f}")
     console.print(table)
+
+
+@app.command()
+def lattice(
+    config: Annotated[Path, typer.Argument(help="Run config TOML.", exists=True, dir_okay=False)],
+    set_: SetOption = None,
+    plot: Annotated[
+        Path | None, typer.Option(help="Write a figure of the lattice and schedule here.")
+    ] = None,
+) -> None:
+    """Describe the configured lattice, dimer covering and graph_hva schedule."""
+    from kagome_vqe.ansatz import GraphHVAnsatz
+
+    cfg = RunConfig.model_validate(_load(config, set_, None))
+    lat = cfg.lattice.build()
+    ansatz = cfg.ansatz.build(lat)
+    info: dict[str, Any] = {
+        "name": lat.name,
+        "num_sites": lat.num_sites,
+        "num_bonds": lat.num_bonds,
+        "boundary": lat.boundary,
+        "wrapped_bonds": [list(b) for b in lat.wrapped_bonds],
+        "connected": lat.is_connected(),
+        "coords": None if lat.coords is None else [list(c) for c in lat.coords],
+        "kagome_geometry": lat.is_kagome_geometry(),
+        "site_order": lat.site_order,
+        "bonds": [[a, b, w] for a, b, w in lat.edges],
+        "dimers": None if lat.dimers is None else [list(d) for d in lat.dimers],
+    }
+    if isinstance(ansatz, GraphHVAnsatz):
+        info["graph_hva"] = ansatz.describe()
+        info["schedule_layers"] = ansatz.schedule.to_list()
+    _print_json(info)
+    if plot is not None:
+        from kagome_vqe.visualize import plot_lattice
+
+        plot_lattice(
+            lat.with_dimers(ansatz.dimers) if isinstance(ansatz, GraphHVAnsatz) else lat,
+            schedule=ansatz.schedule if isinstance(ansatz, GraphHVAnsatz) else None,
+            out=plot,
+        )
+        console.print(f"wrote {plot}")
+
+
+@app.command(name="map")
+def map_(
+    config: Annotated[Path, typer.Argument(help="Run config TOML.", exists=True, dir_okay=False)],
+    strategy: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--strategy",
+            help="Strategy to compile (repeatable): prb105, prb106_grid, generic. Default: all.",
+        ),
+    ] = None,
+    set_: SetOption = None,
+    backend_override: BackendOverride = None,
+    out: Annotated[Path | None, typer.Option(help="Output directory.")] = None,
+    verbose: Verbose = False,
+) -> None:
+    """Compile the configured circuit with each mapping strategy; no job is submitted.
+
+    For backend kind 'ibm' only the device's Target is fetched (credentials needed); nothing
+    runs on the device.
+    """
+    from kagome_vqe.benchmarking import mapping_benchmark, write_mapping_benchmark
+    from kagome_vqe.mapping import MAPPING_STRATEGIES
+
+    configure_logging(logging.DEBUG if verbose else logging.WARNING)
+    strategies = strategy or list(MAPPING_STRATEGIES)
+    unknown = [s for s in strategies if s not in MAPPING_STRATEGIES]
+    if unknown:
+        msg = f"unknown strategies {unknown}; choose from {MAPPING_STRATEGIES}"
+        raise typer.BadParameter(msg)
+    cfg = RunConfig.model_validate(_load(config, set_, backend_override))
+    rows = mapping_benchmark(cfg, strategies, settings=Settings())
+    out_dir = out or Path(cfg.output_dir) / f"{cfg.name}-mapping"
+    json_path, md_path = write_mapping_benchmark(rows, out_dir)
+    console.print(md_path.read_text())
+    console.print(f"summary: {json_path}")
 
 
 # -- run --------------------------------------------------------------------------------------
