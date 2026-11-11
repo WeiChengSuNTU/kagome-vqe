@@ -5,7 +5,7 @@ kagome lattice, built on Qiskit 2.x and ready for IBM Quantum hardware. The orig
 the 12-site kagome unit cell; configurable lattices (open patches, periodic tori, custom
 graphs), a graph-based Hamiltonian variational ansatz with one parameter per gate, and two
 paper-based hardware mappings for square-grid devices extend it
-(see [Generalised lattices and hardware mapping](#generalised-lattices-and-hardware-mapping)).
+(see [Generalised lattices and hardware mapping](#generalised-lattices-graph-hva-and-hardware-mapping)).
 
 The package rebuilds the IBM Quantum Open Science Prize 2022 kagome challenge, and the
 resonating-valence-bond (RVB) and Hamiltonian-variational (HVA) ansatz comparison from
@@ -13,25 +13,45 @@ Shaffar et al. (KICS 2023), as a typed, tested, reproducible Python project. One
 describes a run; one flag moves it from an exact simulator to a noisy fake device to a real
 IBM Quantum system.
 
-## What it does
+## Supported models
 
-The code is a pipeline whose stages map one-to-one onto modules in `src/kagome_vqe/`:
+The spin-1/2 Heisenberg antiferromagnet `H = sum over bonds of J (XX + YY + ZZ)` (Pauli
+normalisation, `= 4 sum S.S`) on:
 
-| stage | module | responsibility |
-|---|---|---|
-| 1 | `lattice.py`, `kagome_lattices.py` | the spin graph (sites, bonds, couplings, optional coordinates, boundary, dimer covering) and its generators |
-| 2 | `hamiltonian.py` | the graph as a `SparsePauliOp`; exact diagonalisation for reference energies and ground-state fidelity |
-| 3 | `schedule.py`, `ansatz/` | gate schedules; trial circuits: `RVBAnsatz`, `HVAnsatz`, `GraphHVAnsatz`, library wrappers |
-| 4 | `mapping/`, `transpile.py` | embed the logical circuit into hardware connectivity (PRB 105, PRB 106 or Qiskit routing) and compile circuit + observable for a backend |
-| 5 | `estimators.py` | evaluate energies on statevector, Aer, fake backends or IBM Quantum |
-| 6 | `optimizers/` | classical minimisers: in-repo ADAM and SPSA, scipy wrapper |
-| 7 | `vqe.py` | the loop that ties 3-6 together and records every evaluation |
-| 8 | `results.py`, `plotting.py` | persistence to `results/` and convergence figures |
+| lattice (`[lattice] kind`) | description |
+|---|---|
+| `kagome_unit_cell` (default) | the open 12-site kagome star (18 bonds; exact ground energy -18, a dimer product) |
+| `kagome_bm_rectangle` | `rows x cols` open rectangles of Bosse & Montanaro (PRB 105), e.g. 2x6: 12 sites, 20 bonds |
+| `kagome_kvqe20` | the 20-site open patch of Kattemolle & van Wezel (PRB 106) |
+| `kagome_patch` | the kagome sites of a `rows x cols` window of triangular-lattice coordinates, optionally with sites dropped |
+| `kagome_periodic` | `rows x cols` tori (periodic boundaries), e.g. 2x2 cells: 12 sites, 24 bonds |
+| `custom` | any graph: `num_sites` and `bonds = [[a, b], [a, b, J], ...]`, optional coordinates and dimers |
 
-Everything is driven by a `RunConfig` (`config.py`) loaded from TOML and exposed through the
-`kagome-vqe` command line (`cli.py`).
+Lattices are validated: no duplicate or self bonds, connected, and a dimer covering must be a
+perfect matching of bonds; the site count never implies a geometry. Exact diagonalisation
+provides reference energies and ground-space fidelities up to about 20
+sites (dense up to 10 qubits, sparse with a residual check above).
 
-## Quickstart
+## Main features
+
+* **Ansatzes**: the legacy ring ansatzes of the 2022 challenge (`rvb`, `hva`: two shared
+  parameters), the graph-based HVA with one parameter per gate (`graph_hva`,
+  `N_theta = p * N_b`, optional H0 block), and Qiskit library circuits.
+* **Backends**: exact statevector, Aer with shot sampling, Aer with a fake device's noise
+  model, fake devices through the runtime code path, and real IBM Quantum devices.
+* **Optimisers**: in-repo ADAM, SPSA (plain or calibrated), gradient descent and any scipy
+  method; gradients by forward/central differences, simultaneous perturbation or parameter
+  shift.
+* **Error mitigation**: readout correction, singlet-symmetry filtering, zero-noise
+  extrapolation and twin rescaling, in any combination.
+* **Hardware mapping**: paper-exact square-grid embeddings (PRB 105, PRB 106) and generic
+  routing, with compile-only resource comparisons for IBM Nighthawk and Heron.
+* **Reproducibility**: every run is a self-contained results directory (configuration,
+  provenance, full trace, initial and final parameters, resource accounting, failure status)
+  that can be reloaded, replayed and reused; multi-seed experiment matrices (`kagome-vqe study`)
+  with budgets, resumption and generated reports.
+
+## Installation and quickstart
 
 Requires Python 3.12+ and [uv](https://docs.astral.sh/uv/).
 
@@ -40,6 +60,7 @@ uv sync                                   # creates .venv from uv.lock
 uv run kagome-vqe exact                   # exact spectrum: -18, -18, -16.9613
 uv run kagome-vqe run configs/statevector_hva_adam.toml
 uv run kagome-vqe benchmark               # RVB/HVA x ADAM/SPSA on the statevector simulator
+uv run kagome-vqe study configs/studies/graph_hva_optimizer_smoke.toml   # ~1 min optimiser smoke study
 ```
 
 Point any config at a different backend or tweak any field without editing files:
@@ -48,11 +69,21 @@ Point any config at a different backend or tweak any field without editing files
 uv run kagome-vqe run configs/statevector_hva_adam.toml --backend-override aer_noisy:FakeGuadalupeV2
 uv run kagome-vqe run configs/statevector_hva_adam.toml --set optimizer.maxiter=30 --set backend.shots=1024
 uv run kagome-vqe run configs/ibm_hva_spsa.toml --dry-run     # ISA depth, gate counts, projected evaluations
-uv run kagome-vqe benchmark --backend-override fake:FakeSherbrooke --set backend.shots=2048
+uv run kagome-vqe replay results/<dir>                        # re-run a saved experiment into a new directory
+uv run kagome-vqe params results/<dir> --out theta.npy        # reuse optimised parameters elsewhere
 uv run kagome-vqe plot results/<dir-a> results/<dir-b> --out convergence.png
+uv run kagome-vqe benchmark --backend-override fake:FakeSherbrooke --set backend.shots=2048
 uv run kagome-vqe backends --min-qubits 12          # fake backends bundled with qiskit-ibm-runtime
 uv run kagome-vqe backends --ibm                    # plus your IBM Quantum devices (needs .env)
 ```
+
+## Architecture
+
+One TOML file (`RunConfig`) describes a run. The pipeline lattice -> Hamiltonian -> ansatz ->
+mapping/transpilation -> estimator -> optimiser -> VQE loop -> results maps one-to-one onto
+modules in `src/kagome_vqe/`; `study.py` adds multi-seed experiment matrices on top. Module
+responsibilities, the run lifecycle, the results-directory format and the command reference
+are in [`docs/architecture.md`](docs/architecture.md).
 
 ## Backends
 
@@ -81,29 +112,20 @@ Whatever the backend, the ansatz is transpiled with `generate_preset_pass_manage
 Hamiltonian is moved onto the chosen physical qubits with `observable.apply_layout`, so the
 energy is the same as on the logical circuit up to noise. This is verified in the test suite.
 
-## Generalised lattices and hardware mapping
+## Ansatzes
 
-Everything in this section is additive. The ring ansatzes and all existing configs behave as
-before, and `[mapping] strategy = "generic"` (the default) is the old transpiler path. The full
-description, with conventions, paper cross-checks and limitations, is in
-[`docs/graph_hva.md`](docs/graph_hva.md).
+| `[ansatz] type` | parameters | notes |
+|---|---|---|
+| `hva` | 2 (shared per layer) | legacy ring HVA of the 2022 challenge; needs a Hamiltonian-cycle site order |
+| `rvb` | 12 | legacy ring resonating-valence-bond ansatz |
+| `graph_hva` | `p * N_b` (OPG), `p * (N_b + 1)` with `include_h0` | singlets on a dimer covering, then `p` cycles of exchange gates `exp(-i theta/2 (XX+YY+ZZ))` on the actual bonds; schedules `greedy`, `prb105`, `prb105_fig3`, `prb106`, `explicit` |
+| `real_amplitudes`, `efficient_su2` | library | hardware-efficient baselines |
 
-**Lattices.** `[lattice] kind` is one of `kagome_unit_cell` (default),
-`kagome_kvqe20` (20-site patch of PRB 106), `kagome_bm_rectangle` (`rows x cols` lattices of
-PRB 105), `kagome_patch` (any window of the triangular lattice), `kagome_periodic`
-(`rows x cols` torus) or `custom` (explicit `num_sites` and `bonds = [[a, b], [a, b, J], ...]`).
-Optional `coords`, `boundary` and `dimers` are also accepted. Lattices are validated: no
-duplicate or self bonds, connected, and a dimer covering must be a perfect matching of bonds.
-The site count never implies a geometry.
+## Generalised lattices, graph HVA and hardware mapping
 
-**Graph-based HVA** (`[ansatz] type = "graph_hva"`). Singlets on a dimer covering, then
-`reps` cycles of SU(2)-symmetric exchange gates `exp(-i theta/2 (XX + YY + ZZ))` on the actual
-bonds. The gates are grouped by a deterministic edge colouring or by a paper schedule
-(`schedule = "greedy" | "prb105" | "prb105_fig3" | "prb106" | "explicit"`). With one parameter
-per gate (OPG, the default), `N_theta = p * N_b`. `include_h0 = true` adds an independently
-parameterised H0 evolution per cycle (PRB 105 "per edge"), giving `p * (N_b + 1)`. Gates
-that only add a global phase, and H0 parameters that fuse with bond gates, are detected and
-reported. `prune_phase_gates = true` removes the former.
+Everything here is additive: the ring ansatzes and all existing configs behave as before, and
+`[mapping] strategy = "generic"` (the default) is the plain transpiler path. Full description,
+conventions, paper cross-checks and limitations: [`docs/graph_hva.md`](docs/graph_hva.md).
 
 **Mapping** (`[mapping] strategy`):
 
@@ -122,7 +144,9 @@ low-error couplers, and `physical_layout` can fix the placement. Routed circuits
 verified against the logical circuit in noiseless simulation, including the final qubit
 permutation and auxiliary qubits returning to `|0>`.
 
-Example configs (`configs/examples/`):
+A strategy never substitutes generic routing silently: with `fallback = "error"` (default) an
+inapplicable strategy fails with the reason; with `fallback = "generic"` the result is
+labelled `generic_fallback`. Example configs (`configs/examples/`):
 
 ```bash
 uv run kagome-vqe run configs/examples/01_legacy_hva_unit_cell.toml          # 1. original 12-site ring HVA
@@ -138,86 +162,8 @@ uv run kagome-vqe exact --config configs/examples/02_graph_hva_no_h0.toml    # e
 uv run kagome-vqe benchmark configs/examples/09_benchmark_graph_hva.toml     # graph_hva vs ring HVA
 ```
 
-`kagome-vqe map` and `run --dry-run` only compile. For `-b ibm:...` they fetch the device
+`kagome-vqe map` and `run --dry-run` only compile; with `-b ibm:...` they fetch the device
 `Target` but never submit a job.
-
-<!-- GRAPH_HVA_BENCHMARKS -->
-### graph_hva benchmarks
-
-**VQE on the exact simulator** (`statevector`, L-BFGS-B, 400 iterations, initial parameters
-uniform in `[0, 0.1)`, seeds 1 and 2; driver: `benchmarks/graph_hva_vqe_sweep.py`). The relative error is
-for the lowest final energy. The fidelity is the overlap with the exact, possibly degenerate,
-ground space from exact diagonalisation. Schedules: `greedy` for the star and the torus,
-`prb105` for the 2x6 rectangle; H0 at the end of each cycle.
-
-| lattice | H0 | p | parameters | best rel. error | best fidelity | seeds |
-|---|---|---|---|---|---|---|
-| 12-site star (open) | no | 1 | 18 | 1.57e-09 | 1.0000 | 2 |
-| 12-site star (open) | yes | 1 | 19 | 6.65e-08 | 1.0000 | 2 |
-| PRB 105 2x6 rectangle (open) | no | 1 | 16 | 7.19e-02 | 0.5105 | 2 |
-| PRB 105 2x6 rectangle (open) | no | 2 | 32 | 1.26e-02 | 0.7556 | 2 |
-| PRB 105 2x6 rectangle (open) | no | 3 | 48 | 1.65e-03 | 0.9957 | 2 |
-| PRB 105 2x6 rectangle (open) | no | 4 | 64 | 4.87e-04 | 0.9987 | 2 |
-| PRB 105 2x6 rectangle (open) | yes | 1 | 17 | 2.29e-02 | 0.7068 | 2 |
-| PRB 105 2x6 rectangle (open) | yes | 2 | 34 | 6.48e-03 | 0.9789 | 2 |
-| PRB 105 2x6 rectangle (open) | yes | 3 | 51 | 6.89e-04 | 0.9981 | 2 |
-| PRB 105 2x6 rectangle (open) | yes | 4 | 68 | 5.07e-04 | 0.9985 | 2 |
-| 12-site torus (periodic) | no | 1 | 24 | 4.53e-02 | 0.2071 | 2 |
-| 12-site torus (periodic) | no | 2 | 48 | 3.15e-02 | 0.4221 | 2 |
-| 12-site torus (periodic) | no | 3 | 72 | 1.94e-02 | 0.5174 | 2 |
-| 12-site torus (periodic) | no | 4 | 96 | 1.63e-02 | 0.5457 | 2 |
-| 12-site torus (periodic) | yes | 1 | 25 | 4.90e-02 | 0.2931 | 2 |
-| 12-site torus (periodic) | yes | 2 | 50 | 2.68e-02 | 0.4451 | 2 |
-| 12-site torus (periodic) | yes | 3 | 75 | 2.06e-02 | 0.5199 | 2 |
-| 12-site torus (periodic) | yes | 4 | 100 | 1.36e-02 | 0.5875 | 2 |
-
-The open lattices converge systematically with depth. On the PRB 105 2x6 rectangle the extra
-H0 parameter helps at small `p` (F = 0.98 versus 0.76 at `p = 2`). For the star the reference
-state is already exact, so it is a correctness check, not a test. The periodic 12-site torus is
-much harder: at `p = 4` the optimiser stops at 1.4-1.6 % error with F = 0.55-0.59.
-That is consistent with the energy-fidelity bound (gap 0.466), and it is a statement about
-expressiveness and optimisation at this depth, not about circuit correctness. Correctness is
-established separately by the routing-equivalence tests.
-
-**Hardware mapping, compile only** (`kagome-vqe map`, `graph_hva` with `p = 2`, no H0,
-optimisation level 3, seed 11; SWAPs for `generic` are those SABRE inserts at level 1;
-"block 2q depth" counts exchange and SWAP gates as one layer each, the papers' convention):
-
-PRB 106 20-site patch (`schedule = "prb106"`) on FakeNighthawk:
-
-| strategy | status | physical qubits | auxiliary | SWAPs | block 2q depth | CZ gates | CZ depth | total depth |
-|---|---|---|---|---|---|---|---|---|
-| prb105 | paper_inspired | 24 | 4 | 40 | 19 | 295 | 55 | 210 |
-| prb106_grid | paper_exact | 24 | 4 | 32 | 15 | 286 | 43 | 183 |
-| generic | generic | 20 | 0 | 29 | - | 237 | 63 | 259 |
-
-PRB 105 3x8 rectangle (`schedule = "prb105"`) on FakeNighthawk:
-
-| strategy | status | physical qubits | auxiliary | SWAPs | block 2q depth | CZ gates | CZ depth | total depth |
-|---|---|---|---|---|---|---|---|---|
-| prb105 | paper_exact | 24 | 0 | 28 | 15 | 292 | 43 | 174 |
-| prb106_grid | paper_inspired | 33 | 9 | 52 | 19 | 396 | 55 | 189 |
-| generic | generic | 25 | 0 | 38 | - | 318 | 76 | 287 |
-
-12-site star (`schedule = "greedy"`) on FakeNighthawk:
-
-| strategy | status | physical qubits | auxiliary | SWAPs | block 2q depth | CZ gates | CZ depth | total depth |
-|---|---|---|---|---|---|---|---|---|
-| prb105 | paper_inspired | 13 | 1 | 22 | 24 | 171 | 62 | 228 |
-| prb106_grid | paper_inspired | 17 | 5 | 26 | 17 | 192 | 49 | 172 |
-| generic | generic | 12 | 0 | 17 | - | 136 | 35 | 147 |
-
-PRB 106 20-site patch on FakeBoston (Heron, heavy-hex): `prb105` and `prb106_grid` are reported
-`unsupported`, because the routed grid does not embed in the coupling map. `generic` needs
-22 qubits, 66 SWAPs and 327 CZ gates at CZ depth 93.
-
-Each paper's own construction is the shallowest option on its own lattice. On the 20-site
-patch, `prb106_grid` gives CZ depth 43 against 63 for generic routing; on the 3x8 rectangle,
-`prb105` gives 43 against 76. Generic routing still uses fewer CZ gates on the 20-site patch
-(237 against 286), because it needs no stations. On the small star, generic routing wins
-outright. None of the strategies is better everywhere; which one is best depends on the
-lattice, the device and whether depth or gate count limits fidelity.
-<!-- /GRAPH_HVA_BENCHMARKS -->
 
 ## Optimisers and gradients
 
@@ -237,6 +183,11 @@ descent obtain their gradient:
 Every run also records the noise-free energy of its parameters after each iteration
 (`track_ideal_energy`, on by default up to 20 qubits). On noisy backends this shows how good the
 parameters are, separately from the noise floor.
+
+Runs can be capped by `[budget] max_evaluations` / `max_shots`, enforced on every energy
+request (calibration included). The M1 recommendations (plain SPSA for the two-parameter
+HVA, ADAM with parameter shift for RVB) were established for the legacy ring ansatzes and do
+not automatically apply to `graph_hva`; see the optimiser study below.
 
 ## Error mitigation
 
@@ -268,195 +219,36 @@ reports at a state whose energy is known, evaluate at fixed parameters instead o
 uv run kagome-vqe benchmark configs/m2_mitigation.toml --point 0 --repeats 8
 ```
 
-## Results directory
+## Experiments
 
-Each run writes `results/<UTC timestamp>-<name>/`:
+Detailed experiment write-ups (goals, configuration, budgets, seeds, results, reproduction
+commands, interpretation, limitations):
 
-| file | contents |
-|---|---|
-| `config.toml` | the resolved `RunConfig`; replay with `kagome-vqe run results/<dir>/config.toml` |
-| `result.json` | re-measured final energy and its relative error, exact energy, total shots, parameters, ISA stats, timings |
-| `trace.csv` | one row per energy evaluation: `eval_idx, iteration, energy, std, shots, wall_time_s, job_id` |
-| `params.npy` | parameters of every evaluation, shape `(nfev, n)` (when `record_params = true`) |
-| `ideal_trace.csv` | noise-free energy of the parameters after every iteration, with shots spent |
-| `environment.json` | package versions, Python, platform, git commit and dirty flag |
-| `run.log` | the log of the run |
+| document | contents | status |
+|---|---|---|
+| [`docs/experiments/legacy_m0_m1_m2.md`](docs/experiments/legacy_m0_m1_m2.md) | 12-site star, legacy ring ansatzes: exact and noisy FakeGuadalupeV2 benchmarks (M0), gradient comparison (M1), error mitigation (M2) | completed |
+| [`docs/experiments/graph_hva_baseline.md`](docs/experiments/graph_hva_baseline.md) | `graph_hva` with L-BFGS-B on the star, the PRB 105 2x6 rectangle and the 12-site torus, `p = 1-4`, with and without H0 | completed (2 seeds) |
+| [`docs/experiments/graph_hva_optimizers.md`](docs/experiments/graph_hva_optimizers.md) | L-BFGS-B vs calibrated SPSA vs ADAM + SPSA gradient for `graph_hva`, noiseless and finite-shot, equal budgets | smoke and limited comparison completed; full profile configured, not yet run |
+| [`docs/hardware.md`](docs/hardware.md) | compile-only mapping benchmarks on IBM Nighthawk and Heron | completed |
+| [`docs/roadmap.md`](docs/roadmap.md) | diagnosis of the noisy-energy gap and the milestone plan | living |
 
-`kagome-vqe benchmark` additionally writes `results/<name>-summary/` with `benchmark.json`,
-`benchmark.md` and `convergence.png`.
+Summary of the legacy results: unmitigated noisy runs on FakeGuadalupeV2 plateau near -12.7
+(29 % error) because of gate and readout noise; the M2 stack readout correction + symmetry
+filtering + twin rescaling brings the bias to +0.4 to +1.9 % without relying on errors
+cancelling.
 
-## Benchmark
+## Current limitations
 
-Every number below is the optimiser's final parameters re-measured once, not the lowest value
-seen during optimisation, which is biased low under shot noise.
-
-### Exact statevector
-
-Seed 42, the paper's hyperparameters (`maxiter = 100`, `lr = 0.01`, `perturbation = 0.01`),
-initial point `x0 = pi/4 * rand`. Produced by `kagome-vqe benchmark`.
-
-| run | final E (re-measured) | exact E | rel. err | 2q gates | evaluations | total shots | time (s) |
-|---|---|---|---|---|---|---|---|
-| rvb_spsa | -17.8369 | -18.0000 | 0.906 % | 78 | 201 | 0 | 1.7 |
-| rvb_adam | -17.9980 | -18.0000 | 0.011 % | 78 | 1301 | 0 | 11.2 |
-| hva_spsa | -18.0000 | -18.0000 | 0.000 % | 78 | 201 | 0 | 2.2 |
-| hva_adam | -18.0000 | -18.0000 | 0.000 % | 78 | 301 | 0 | 3.3 |
-
-Evaluation counts follow the optimisers' cost model: ADAM with forward differences spends
-`n + 1` evaluations per iteration (13 for RVB, 3 for HVA) plus one final evaluation; SPSA
-spends 2 per iteration plus one final evaluation. The two-qubit gate count is for the logical
-circuit; nothing is transpiled for hardware here.
-
-### Noisy FakeGuadalupeV2
-
-Produced by `kagome-vqe benchmark configs/benchmark_fake_guadalupe.toml`: `aer_noisy` on
-`FakeGuadalupeV2`, heavy-hex loop layout, seed 42, 4096 shots per measurement basis, final
-re-measurement with 16384 shots, `x0 = 0.3 * rand`. SPSA runs 50 iterations
-(`lr = 0.05`, `perturbation = 0.1`); ADAM runs 30 (`lr = 0.05`, `fd_eps = 0.1`).
-
-| run | final E (re-measured) | exact E | rel. err | 2q gates | evaluations | total shots | time (s) |
-|---|---|---|---|---|---|---|---|
-| rvb_spsa | -12.7168 | -18.0000 | 29.351 % | 66 | 101 | 1,290,240 | 266.9 |
-| rvb_adam | -12.7188 | -18.0000 | 29.340 % | 66 | 391 | 4,853,760 | 1040.3 |
-| hva_spsa | -12.8689 | -18.0000 | 28.506 % | 66 | 101 | 1,290,240 | 273.2 |
-| hva_adam | -12.6729 | -18.0000 | 29.595 % | 66 | 91 | 1,167,360 | 244.2 |
-
-All four combinations end at the noise floor. Measured directly at the exact ground-state
-parameters, with 16384 shots:
-
-| ansatz | CX gates | readout error only | gate + T1/T2 error only | full noise |
-|---|---|---|---|---|
-| HVA | 66 | -16.43 | -14.01 | -12.78 |
-| RVB | 66 | -16.43 | -13.94 | -12.70 |
-
-The two error sources combine multiplicatively: readout keeps 91 % of the ideal energy, gate
-errors keep 78 %, and their product predicts the full-noise value. No optimiser setting can
-get below this floor; closing the gap is the job of error mitigation and shallower circuits,
-as planned in the roadmap. Results before October 2026 used an Aer estimator that never
-sampled measurements; they omitted readout error and reported a floor near -14.
-
-### Gradient comparison (roadmap M1)
-
-Produced by `configs/m1_gradients_ideal.toml` and `configs/m1_gradients_noisy.toml`. Every
-method spends the same 24576 shots per measurement basis per iteration, split over the
-energies its gradient needs, for 40 iterations without gate noise and 20 with it. All gradient
-methods share ADAM with `lr = 0.05`; plain SPSA uses its own update with `lr = 0.01`. The
-metric is the noise-free energy of the final parameters, relative to -18: how good the
-parameters are, separately from the noise floor. The noisy run covers RVB only, because noisy
-simulation costs about 2.5 s per energy and HVA parameter shift needs 72 energies per step.
-
-| ansatz | method | energies per iteration | noise-free error, shot noise only (mean ± sample std, 5 seeds) | noise-free error, FakeGuadalupeV2 noise (1 seed) |
-|---|---|---|---|---|
-| HVA | ADAM, forward differences (the paper) | 3 | 0.252 % ± 0.218 | not run |
-| HVA | ADAM, central differences | 5 | 0.125 % ± 0.142 | not run |
-| HVA | ADAM, SPSA gradient (hybrid) | 2 | 0.113 % ± 0.137 | not run |
-| HVA | ADAM, parameter shift | 72 | 0.126 % ± 0.107 | not run |
-| HVA | plain SPSA | 2 | 0.001 % ± 0.001 | not run |
-| RVB | ADAM, forward differences (the paper) | 13 | 0.149 % ± 0.111 | 0.503 % |
-| RVB | ADAM, central differences | 25 | 0.039 % ± 0.015 | not run |
-| RVB | ADAM, SPSA gradient (hybrid) | 2 | 0.172 % ± 0.179 | 1.428 % |
-| RVB | ADAM, parameter shift | 24 | 0.022 % ± 0.012 | 0.079 % |
-| RVB | plain SPSA | 2 | 1.756 % ± 0.573 | 3.787 % |
-
-- **RVB: use ADAM with parameter shift.** It gives the most precise parameters at the same
-  shot budget, without and with noise. Plain SPSA is the least precise for RVB's 12 parameters.
-- **HVA: use plain SPSA.** With only two parameters it reaches the most precise parameters,
-  while parameter shift costs 72 energies per step. The ADAM variants all plateau at a similar
-  level, which points to ADAM's fixed step size as the limit rather than the gradients.
-- `configs/fake_guadalupe_rvb_adam_ps.toml` and `configs/ibm_hva_spsa.toml` encode these
-  choices. The noise-free errors per shot spent are plotted in
-  `results/m1_ideal-summary/ideal_vs_shots.png`.
-
-### Error mitigation (roadmap M2)
-
-Produced by `kagome-vqe benchmark configs/m2_mitigation.toml --point 0 --repeats 8` and
-`--point 0.3`, plus `--set backend.noise=readout` and `--set backend.noise=gates` to apply one
-error source at a time. Each cell is the relative bias of the mean against the noise-free energy,
-in %, with its standard error, on `FakeGuadalupeV2` at 4096 shots per basis. Every repeat builds
-its own estimator, so one-off measurements (readout calibration, twin) are redone and their
-noise is part of the error. ⚠ marks a mean significantly below -18, which by the variational
-principle is an artefact.
-
-| stack | full noise, exact params | full noise, θ = 0.3 | readout noise only, θ = 0.3 | gate noise only, θ = 0.3 | shots per energy | one-off shots |
-|---|---|---|---|---|---|---|
-| none (HVA) | +29.08 ± 0.12 | +28.40 ± 0.15 | +8.17 ± 0.16 | +21.96 ± 0.15 | 12,288 | 0 |
-| none (RVB) | +29.27 ± 0.09 | +29.21 ± 0.19 | +8.45 ± 0.13 | +22.66 ± 0.13 | 12,288 | 0 |
-| readout (HVA) | +22.11 ± 0.18 | +22.11 ± 0.19 | +0.12 ± 0.13 | +22.07 ± 0.15 | 12,288 | 32,768 |
-| readout (RVB) | +22.50 ± 0.17 | +22.24 ± 0.19 | -0.03 ± 0.09 | +22.28 ± 0.15 | 12,288 | 32,768 |
-| symmetry (HVA) | +8.64 ± 0.09 | +8.01 ± 0.15 | +0.60 ± 0.11 | +4.46 ± 0.16 | 12,288 | 0 |
-| symmetry (RVB) | +8.97 ± 0.13 | +8.84 ± 0.14 | +0.74 ± 0.05 | +4.96 ± 0.11 | 12,288 | 0 |
-| readout+symmetry (HVA) | +5.10 ± 0.10 | +4.38 ± 0.22 | -0.01 ± 0.12 | +4.37 ± 0.16 | 12,288 | 32,768 |
-| readout+symmetry (RVB) | +5.24 ± 0.14 | +4.90 ± 0.24 | -0.03 ± 0.05 | +4.96 ± 0.11 | 12,288 | 32,768 |
-| zne (HVA) | +10.79 ± 0.21 | +9.05 ± 0.20 | +8.17 ± 0.16 | +0.96 ± 0.19 | 36,864 | 0 |
-| zne (RVB) | +9.87 ± 0.20 | +9.99 ± 0.24 | +8.45 ± 0.13 | +1.63 ± 0.18 | 36,864 | 0 |
-| readout+zne (HVA) | +1.81 ± 0.31 | +1.60 ± 0.25 | +0.12 ± 0.13 | +1.57 ± 0.17 | 36,864 | 98,304 |
-| readout+zne (RVB) | +1.44 ± 0.19 | +1.07 ± 0.30 | -0.03 ± 0.09 | +1.13 ± 0.23 | 36,864 | 98,304 |
-| readout+symmetry+zne (HVA) | -7.33 ± 0.28 ⚠ | -7.27 ± 0.25 | -0.01 ± 0.12 | -7.32 ± 0.22 | 36,864 | 98,304 |
-| readout+symmetry+zne (RVB) | -7.69 ± 0.20 ⚠ | -7.79 ± 0.38 ⚠ | -0.03 ± 0.05 | -7.59 ± 0.17 ⚠ | 36,864 | 98,304 |
-| twin (HVA) | -4.77 ± 0.47 ⚠ | -5.48 ± 0.39 | -0.58 ± 0.29 | -4.82 ± 0.37 | 12,288 | 49,152 |
-| twin (RVB) | -0.61 ± 0.18 ⚠ | -0.91 ± 0.23 | +0.59 ± 0.12 | -1.41 ± 0.25 | 12,288 | 49,152 |
-| readout+twin (HVA) | -4.78 ± 0.20 ⚠ | -4.62 ± 0.32 | -0.19 ± 0.22 | -4.83 ± 0.32 | 12,288 | 81,920 |
-| readout+twin (RVB) | -1.23 ± 0.24 ⚠ | -1.36 ± 0.18 | +0.05 ± 0.18 | -1.40 ± 0.21 | 12,288 | 81,920 |
-| **readout+symmetry+twin** (HVA) | +1.94 ± 0.25 | +1.06 ± 0.31 | -0.23 ± 0.22 | +0.63 ± 0.24 | 12,288 | 81,920 |
-| **readout+symmetry+twin** (RVB) | +0.53 ± 0.17 | +0.35 ± 0.18 | -0.08 ± 0.06 | +0.56 ± 0.12 | 12,288 | 81,920 |
-
-- **Chosen stack: readout correction, then symmetry filtering, then twin rescaling.**
-  - Its bias is +0.4 to +1.9 % under full noise, +0.6 % with gate noise alone and about 0 with
-    readout noise alone.
-  - The documentation worktree's exact density-matrix analysis, with no sampling, gives an
-    infinite-shot limit of +0.5 to +1.3 %, consistent with these numbers.
-  - The bias is positive everywhere: the stack under-corrects slightly and never overshoots.
-  - It works on each error source separately, so no errors are cancelling.
-  - The highest value, +1.94 % for HVA at the exact parameters, was a fluctuation in the twin
-    measurement. Two reruns with new seeds and 16 repeats give +1.32 ± 0.22 % and
-    +1.14 ± 0.14 %, matching the +1.27 % limit.
-  - It costs no extra shots per energy, plus 81,920 one-off shots.
-- **Readout correction plus ZNE is comparable for HVA,** at +1.6 to +1.8 %, but costs three
-  times the shots per energy and is worse for RVB. It remains the fallback for ansatzes without
-  the singlet symmetry.
-- **Why the twin works after filtering.** The filter leaves only noise inside the singlet sector,
-  which damps different states much more uniformly. The documentation worktree measured the
-  mismatch in damping between HVA states falling from 4.7 % to 1.3 %: much more uniform, though
-  not exactly. The remaining mismatch is the residual bias.
-- **Readout correction plus symmetry filtering alone leaves a 4 to 5 % gate-noise residual**
-  that the filter cannot see.
-- **Never combine symmetry filtering with ZNE.** It over-corrects by about 7 % even with gate
-  noise alone.
-- **Limits.** Correct-then-filter works on the full outcome distribution and the automatic twin
-  needs a classical simulation. Both cap at about 20 qubits and need replacing before larger
-  lattices (M3).
-
-The chosen stack in a full optimisation (`configs/m2_mitigated_vqe.toml`), with the
-M1-recommended optimisers, on full `FakeGuadalupeV2` noise:
-
-| run | final energy, re-measured | relative error | noise-free energy of final parameters | total shots |
-|---|---|---|---|---|
-| HVA, plain SPSA | -17.958 ± 0.116 | 0.23 % | -17.995 | 1,372,160 |
-| RVB, ADAM with parameter shift | -17.898 ± 0.068 | 0.57 % | -17.961 | 1,608,704 |
-
-Unmitigated, these runs end near -12.7 (29 % error). Neither reading lies below -18; the
-error bars include the twin's uncertainty, since a single run measures its twin once.
-
-**Correction history.** The M2 result was corrected twice, both times after the documentation
-worktree recomputed it exactly.
-
-1. **Commit `c9272e3`** recommended readout plus symmetry, applied filter-first. With readout
-   noise alone it over-corrected by about 9 % (-19.57 instead of -18). Under full noise that
-   happened to cancel the gate-noise residual on this device. Commit `56aadd3` switched to
-   correct-then-filter and added the noise-source switch.
-2. **The follow-up study measured the readout calibration and the twin once** and shared them
-   across repeats, so its spread hid their noise and it claimed a bias of at most 0.43 %.
-   Commit `2116da4` redoes them in every repeat; the tables above come from that run.
-
-Earlier results remain in `results/m2-*` and `results/m2b-*`.
-
-## Roadmap
-
-Unmitigated noisy runs plateau near -12.7 because of circuit and readout noise. Milestones M0
-(an honest noisy simulator), M1 (better gradients) and M2 (error mitigation, which brings the
-bias to about 1 % without relying on errors cancelling) are done. [`docs/roadmap.md`](docs/roadmap.md) records the
-diagnosis, the improvement directions (parameter-shift gradients, depth compression, error
-mitigation, subspace methods such as QSE and Krylov diagonalisation) and the milestone plan.
+* Exact references (energies, fidelities, noise-free tracking) and the M2 mitigation stack
+  (full-distribution readout correction, automatic twin) need classical simulation and cap at
+  about 20 qubits.
+* The paper mappings support open patches with coordinates only; heavy-hex devices are
+  reported unsupported for them.
+* `graph_hva` on the periodic 12-site torus does not reach the ground state at `p <= 4` within
+  the evaluation limits used so far.
+* Optimiser conclusions for `graph_hva` so far rest on a limited 12-site comparison; the full
+  multi-seed study is configured but not run. Physical noise has not yet been studied for
+  `graph_hva`.
 
 ## Physics notes
 
@@ -476,7 +268,8 @@ mitigation, subspace methods such as QSE and Krylov diagonalisation) and the mil
   available with `ansatz.gate = "legacy"`.
 
 The full story, including the layout analysis of the legacy 16-qubit lattice, is in
-[`docs/physics.md`](docs/physics.md). Lattices beyond the 12-site cell, the graph-based HVA and the hardware mappings are covered in [`docs/graph_hva.md`](docs/graph_hva.md).
+[`docs/physics.md`](docs/physics.md). Lattices beyond the 12-site cell, the graph-based HVA and the hardware mappings are
+covered in [`docs/graph_hva.md`](docs/graph_hva.md).
 
 ## Running on IBM Quantum
 
@@ -499,9 +292,11 @@ and its client-side successor (`executor`). See [`docs/ibm.md`](docs/ibm.md).
 ```bash
 uv sync --all-groups
 uv run pre-commit install
-just lint        # ruff check + ruff format --check + mypy
+just lint        # ruff check + ruff format --check
+just typecheck   # mypy
 just test        # fast unit tests
 just test-all    # plus the slow and fake-backend integration tests
+just docs-test   # numbers quoted by report/ and slides/ (needs the local M0-M2 results/)
 ```
 
 Pytest markers: `slow` (full optimisations, tens of seconds), `fake` (noisy fake backends),

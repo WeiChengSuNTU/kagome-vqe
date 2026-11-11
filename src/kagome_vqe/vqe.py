@@ -33,11 +33,12 @@ from kagome_vqe.hamiltonian import (
     relative_error,
 )
 from kagome_vqe.lattice import Lattice
-from kagome_vqe.optimizers import IterationInfo, Optimizer
+from kagome_vqe.optimizers import IterationInfo, Optimizer, OptimizeResult
 from kagome_vqe.transpile import IsaProblem, compile_for_backend, compile_mapping
 
 __all__ = [
     "IDEAL_TRACKING_MAX_QUBITS",
+    "BudgetExhaustedError",
     "EnergyObjective",
     "FixedPointResult",
     "IdealPoint",
@@ -46,7 +47,9 @@ __all__ = [
     "VQERunResult",
     "compile_problem",
     "evaluate_fixed",
+    "initial_point",
     "prepare",
+    "problem_metadata",
     "run_vqe",
 ]
 
@@ -82,6 +85,10 @@ class TraceRow:
     job_id: str | None
 
 
+class BudgetExhaustedError(RuntimeError):
+    """Raised by :class:`EnergyObjective` instead of evaluating past the run's budget."""
+
+
 class EnergyObjective:
     """An :class:`~kagome_vqe.optimizers.ExpandableObjective` that records every evaluation.
 
@@ -112,6 +119,49 @@ class EnergyObjective:
         self.params: list[FloatArray] = []
         self._iteration = 1
         self._listeners: list[Callable[[TraceRow], None]] = []
+        self._max_evaluations: int | None = None
+        self._max_shots: int | None = None
+        self._shots_per_evaluation = 0
+        self._shot_cost: Callable[[int], int] = lambda measured: measured
+
+    def set_budget(
+        self,
+        *,
+        max_evaluations: int | None = None,
+        max_shots: int | None = None,
+        shots_per_evaluation: int | None = None,
+        shot_cost: Callable[[int], int] | None = None,
+    ) -> None:
+        """Refuse (with :class:`BudgetExhaustedError`) any batch that would exceed a limit.
+
+        Args:
+            max_evaluations: Limit on recorded evaluations.
+            max_shots: Limit on total circuit shots, as computed by ``shot_cost``.
+            shots_per_evaluation: Shots per measurement basis of one evaluation.
+            shot_cost: Total shots (all bases, mitigation overheads) for a given sum of
+                per-basis shots; identity if omitted.
+        """
+        self._max_evaluations = max_evaluations
+        self._max_shots = max_shots
+        self._shots_per_evaluation = shots_per_evaluation or 0
+        if shot_cost is not None:
+            self._shot_cost = shot_cost
+
+    def _check_budget(self, rows: int) -> None:
+        if self._max_evaluations is not None and self.nfev + rows > self._max_evaluations:
+            msg = (
+                f"budget exhausted: {self.nfev} + {rows} evaluations would exceed "
+                f"max_evaluations={self._max_evaluations}"
+            )
+            raise BudgetExhaustedError(msg)
+        if self._max_shots is not None:
+            projected = self._shot_cost(self.shots_spent + rows * self._shots_per_evaluation)
+            if projected > self._max_shots:
+                msg = (
+                    f"budget exhausted: the next {rows} evaluations would bring the run to "
+                    f"{projected:,} shots, above max_shots={self._max_shots:,}"
+                )
+                raise BudgetExhaustedError(msg)
 
     def add_listener(self, fn: Callable[[TraceRow], None]) -> None:
         """Call ``fn`` after every evaluation (progress bars, live logging)."""
@@ -158,6 +208,7 @@ class EnergyObjective:
         return self._evaluate(phis, thetas)
 
     def _evaluate(self, phis: FloatArray, thetas: FloatArray) -> FloatArray:
+        self._check_budget(phis.shape[0])
         result = self._estimator.evaluate(phis)
         per_eval = result.wall_time_s / max(1, phis.shape[0])
         for x, energy, std in zip(thetas, result.energies, result.stds, strict=True):
@@ -312,6 +363,10 @@ class VQERunResult:
         ideal_fidelity: Overlap of the noise-free final state with the exact (possibly
             degenerate) ground space, if tracked. Separates circuit expressiveness and
             optimiser convergence from the energy alone.
+        resources: Resource accounting: evaluations split into calibration, optimiser and
+            re-measurement, shots, budget and timing (see :func:`run_vqe`).
+        metadata: What was actually built: lattice bonds, boundary and dimers, ansatz
+            structure and parameter count, optimiser and gradient estimator, termination.
     """
 
     config: RunConfig
@@ -335,6 +390,8 @@ class VQERunResult:
     ideal_energy: float | None = None
     ideal_trace: list[IdealPoint] = field(default_factory=list)
     ideal_fidelity: float | None = None
+    resources: dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
 
     @property
     def ideal_relative_error(self) -> float | None:
@@ -546,6 +603,67 @@ def _fidelity(prep: Prepared, theta: FloatArray) -> float | None:
     return ground_state_fidelity(state.data, space)
 
 
+class _IdealTracker:
+    """Noise-free energy after every iteration, timed separately from the optimisation."""
+
+    def __init__(self, prep: Prepared) -> None:
+        self._fn = _ideal_energy_fn(prep)
+        self.trace: list[IdealPoint] = []
+        self.time_s = 0.0
+
+    @property
+    def enabled(self) -> bool:
+        return self._fn is not None
+
+    def energy(self, theta: FloatArray) -> float | None:
+        if self._fn is None:
+            return None
+        tick = time.perf_counter()
+        value = self._fn(theta)
+        self.time_s += time.perf_counter() - tick
+        return value
+
+    def record(self, nit: int, nfev: int, shots: int, theta: FloatArray) -> None:
+        value = self.energy(theta)
+        if value is not None:
+            self.trace.append(IdealPoint(nit, nfev, shots, value))
+
+
+def _minimise(
+    cfg: RunConfig,
+    optimizer: Optimizer,
+    objective: EnergyObjective,
+    x0: FloatArray,
+    callback: Callable[[IterationInfo], None],
+) -> tuple[OptimizeResult, bool]:
+    """Run the optimiser; on budget exhaustion return the last completed iterate.
+
+    Returns:
+        The optimiser result and whether the budget stopped it.
+    """
+    last = IterationInfo(nit=0, x=np.array(x0, dtype=float), fun=math.nan, nfev=0)
+
+    def remember(info: IterationInfo) -> None:
+        nonlocal last
+        last = info
+        callback(info)
+
+    try:
+        return optimizer.minimize(objective, x0, callback=remember), False
+    except BudgetExhaustedError as exc:
+        # What the optimiser would have returned had it been told to stop at this iterate.
+        log.info("%s: %s; keeping iteration %d", cfg.name, exc, last.nit)
+        result = OptimizeResult(
+            x=np.array(last.x, dtype=float),
+            fun=math.nan,
+            nfev=objective.nfev,
+            nit=last.nit,
+            success=False,
+            message=str(exc),
+        )
+        return result, True
+
+
 def run_vqe(
     cfg: RunConfig,
     *,
@@ -562,15 +680,17 @@ def run_vqe(
         on_evaluation: Called after every energy evaluation (for progress display).
 
     Returns:
-        The result, including the full evaluation trace.
+        The result, including the full evaluation trace, resource accounting and metadata.
     """
     prep = prepared or prepare(cfg, settings=settings)
+    x0 = initial_point(cfg, prep.ansatz.num_parameters)
+    # The optimiser's random stream continues after the initial point, exactly as before
+    # initial_point existed, so earlier runs replay bit for bit.
     rng = np.random.default_rng(cfg.seed)
-    x0 = cfg.x0_scale * rng.random(prep.ansatz.num_parameters)
+    rng.random(prep.ansatz.num_parameters)
     optimizer: Optimizer = cfg.optimizer.build(rng, prep.parameter_map)
     groups = 0 if cfg.backend.is_exact else prep.problem.measurement_groups
-    ideal = _ideal_energy_fn(prep)
-    ideal_trace: list[IdealPoint] = []
+    tracker = _IdealTracker(prep)
 
     start = time.perf_counter()
     with make_estimator(
@@ -584,21 +704,21 @@ def run_vqe(
         objective = EnergyObjective(
             estimator, record_params=cfg.record_params, parameter_map=prep.parameter_map
         )
+        if cfg.budget.enabled:
+            objective.set_budget(
+                max_evaluations=cfg.budget.max_evaluations,
+                max_shots=cfg.budget.max_shots,
+                shots_per_evaluation=cfg.backend.shots,
+                shot_cost=lambda measured: _shot_cost(cfg, groups, measured),
+            )
 
         def on_iteration(info: IterationInfo) -> None:
             objective.on_iteration(info)
-            if ideal is not None:
-                ideal_trace.append(
-                    IdealPoint(
-                        info.nit,
-                        objective.nfev,
-                        _shot_cost(cfg, groups, objective.shots_spent),
-                        ideal(info.x),
-                    )
-                )
+            tracker.record(
+                info.nit, objective.nfev, _shot_cost(cfg, groups, objective.shots_spent), info.x
+            )
 
-        if ideal is not None:
-            ideal_trace.append(IdealPoint(0, 0, 0, ideal(x0)))
+        tracker.record(0, 0, 0, x0)
         if on_evaluation is not None:
             objective.add_listener(on_evaluation)
         log.info(
@@ -607,16 +727,37 @@ def run_vqe(
             float(np.linalg.norm(x0)),
             "?" if prep.projected_evaluations is None else prep.projected_evaluations,
         )
-        opt = optimizer.minimize(objective, x0, callback=on_iteration)
+        opt, exhausted = _minimise(cfg, optimizer, objective, x0, on_iteration)
+        optimisation_end = time.perf_counter()
         final = estimator.evaluate(
             prep.parameter_map.expand(np.asarray(opt.x, dtype=float))[None, :],
             shots=cfg.backend.remeasure_shots,
         )
         description = estimator.description
     elapsed = time.perf_counter() - start
+    final_energy = float(final.energies[0])
+    if not math.isfinite(opt.fun):
+        opt.fun = final_energy
 
-    total_shots = _shot_cost(cfg, groups, objective.shots_spent + (final.shots or 0))
-
+    post_start = time.perf_counter()
+    ideal_energy = tracker.energy(opt.x)
+    fidelity = None if not tracker.enabled else _fidelity(prep, np.asarray(opt.x, float))
+    resources = _resources(
+        cfg,
+        objective,
+        optimizer,
+        prep,
+        iterations=opt.nit,
+        remeasurement_shots=final.shots,
+        budget_exhausted=exhausted,
+        timing={
+            "wall_time_s": elapsed,
+            "optimisation_wall_time_s": optimisation_end - start,
+            "ideal_tracking_time_s": tracker.time_s,
+            "optimiser_wall_time_s": optimisation_end - start - tracker.time_s,
+            "analysis_time_s": time.perf_counter() - post_start,
+        },
+    )
     best = objective.best
     best_energy = opt.fun if best is None else min(opt.fun, best.energy)
     result = VQERunResult(
@@ -634,13 +775,15 @@ def run_vqe(
         estimator=description,
         wall_time_s=elapsed,
         optimizer_message=opt.message,
-        final_energy=float(final.energies[0]),
+        final_energy=final_energy,
         final_std=float(final.stds[0]),
         final_shots=final.shots if not cfg.backend.is_exact else None,
-        total_shots=int(total_shots),
-        ideal_energy=None if ideal is None else ideal(opt.x),
-        ideal_trace=ideal_trace,
-        ideal_fidelity=None if ideal is None else _fidelity(prep, np.asarray(opt.x, float)),
+        total_shots=int(resources["total_shots"]),
+        ideal_energy=ideal_energy,
+        ideal_trace=tracker.trace,
+        ideal_fidelity=fidelity,
+        resources=resources,
+        metadata=_run_metadata(prep, optimizer, opt, budget_exhausted=exhausted),
     )
     log.info(
         "%s finished: E_final=%.6f (exact %.6f, rel. err %.2e), %d evaluations in %.1fs",
@@ -652,6 +795,117 @@ def run_vqe(
         elapsed,
     )
     return result
+
+
+def _run_metadata(
+    prep: Prepared, optimizer: Optimizer, opt: OptimizeResult, *, budget_exhausted: bool
+) -> dict[str, Any]:
+    """:func:`problem_metadata` plus the optimiser actually used and why it stopped."""
+    cfg = prep.config
+    metadata = problem_metadata(prep)
+    metadata["optimizer"] = {
+        "label": cfg.optimizer.label(),
+        "implementation": repr(optimizer),
+        "gradient": cfg.optimizer.gradient_description(),
+        "calibrated_learning_rate": getattr(optimizer, "calibrated_learning_rate", None),
+    }
+    metadata["termination"] = {
+        "message": opt.message,
+        "success": bool(opt.success),
+        "reason": "budget" if budget_exhausted else "optimizer",
+    }
+    return metadata
+
+
+def _resources(
+    cfg: RunConfig,
+    objective: EnergyObjective,
+    optimizer: Optimizer,
+    prep: Prepared,
+    *,
+    iterations: int,
+    remeasurement_shots: int | None,
+    budget_exhausted: bool,
+    timing: dict[str, float],
+) -> dict[str, Any]:
+    """Resource accounting of one run (see :attr:`VQERunResult.resources`).
+
+    Evaluations are what the optimiser requested from the backend (calibration probes
+    included); the one re-measurement of the final parameters is listed separately. Shots are
+    totals over all measurement bases and mitigation overheads. ``ideal_tracking_time_s`` is
+    classical bookkeeping (noise-free energy per iteration) that no real experiment would pay,
+    so ``optimiser_wall_time_s`` excludes it.
+    """
+    groups = 0 if cfg.backend.is_exact else prep.problem.measurement_groups
+    exact = cfg.backend.is_exact
+    calibration = int(getattr(optimizer, "calibration_evaluations", 0) or 0)
+    return {
+        "objective_evaluations": objective.nfev,
+        "calibration_evaluations": calibration,
+        "optimizer_evaluations": objective.nfev - calibration,
+        "remeasurement_evaluations": 1,
+        "evaluations_per_iteration": optimizer.evaluations_per_iteration(
+            prep.ansatz.num_parameters
+        ),
+        "iterations": iterations,
+        "measurement_groups": groups,
+        "shots_per_evaluation": None if exact else cfg.backend.shots,
+        "remeasurement_shots": None if exact else remeasurement_shots,
+        "optimisation_shots": _shot_cost(cfg, groups, objective.shots_spent),
+        "total_shots": _shot_cost(cfg, groups, objective.shots_spent + (remeasurement_shots or 0)),
+        "budget": cfg.budget.model_dump(),
+        "budget_exhausted": budget_exhausted,
+        **timing,
+    }
+
+
+def initial_point(cfg: RunConfig, num_parameters: int) -> FloatArray:
+    """The initial parameters of a run: uniform in ``[0, x0_scale)`` from ``cfg.seed``.
+
+    Depends only on the seed, ``x0_scale`` and the parameter count, so every optimiser
+    configured with the same seed starts from the same point.
+    """
+    return cfg.x0_scale * np.random.default_rng(cfg.seed).random(num_parameters)
+
+
+def problem_metadata(prep: Prepared) -> dict[str, Any]:
+    """The built lattice and ansatz, in full, for result files.
+
+    The configuration says how to generate them; this records what was generated (every bond
+    and its weight, the boundary, the dimer covering, the gate schedule), so a result stays
+    interpretable even if a generator changes later.
+    """
+    lattice = prep.lattice
+    ansatz = prep.ansatz
+    graph_details = ansatz.describe() if isinstance(ansatz, GraphHVAnsatz) else {}
+    return {
+        "lattice": {
+            "name": lattice.name,
+            "num_sites": lattice.num_sites,
+            "num_bonds": lattice.num_bonds,
+            "bonds": [[a, b, w] for a, b, w in lattice.edges],
+            "boundary": lattice.boundary,
+            "wrapped_bonds": [list(p) for p in lattice.wrapped_bonds],
+            "dimers": None if lattice.dimers is None else [list(d) for d in lattice.dimers],
+            "coords": None if lattice.coords is None else [list(c) for c in lattice.coords],
+            "site_order": None if lattice.site_order is None else list(lattice.site_order),
+        },
+        "hamiltonian": {
+            "convention": "H = sum_bonds J (XX + YY + ZZ) (Pauli normalisation = 4 sum S.S)",
+            "terms": len(prep.hamiltonian),
+            "exact_spectrum": [float(v) for v in prep.exact_spectrum],
+        },
+        "ansatz": {
+            "name": ansatz.name,
+            "type": prep.config.ansatz.type,
+            "reps": prep.config.ansatz.reps,
+            "num_parameters": ansatz.num_parameters,
+            "circuit_parameters": prep.parameter_map.num_occurrences,
+            **graph_details,
+        },
+        "seed": prep.config.seed,
+        "x0_scale": prep.config.x0_scale,
+    }
 
 
 @dataclass(slots=True)

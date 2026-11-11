@@ -19,7 +19,7 @@ Updated after M0. Energies are the final parameters re-measured once.
 | exact statevector, RVB + SPSA | -17.8369 | 0.906 % | `configs/benchmark.toml` |
 | noisy FakeGuadalupeV2, all four combos | -12.67 to -12.87 | 28.5 to 29.6 % | `configs/benchmark_fake_guadalupe.toml` |
 
-Full tables are in the README. Before M0 the noisy figure was -14.0 to -14.1; that simulation
+Full tables are in [`experiments/legacy_m0_m1_m2.md`](experiments/legacy_m0_m1_m2.md) (formerly in the README). Before M0 the noisy figure was -14.0 to -14.1; that simulation
 never sampled measurements, so it omitted readout error.
 
 ### 1.2 Diagnosis: the noisy runs converged to a biased floor
@@ -313,7 +313,8 @@ Original plan:
 ### M1. Better gradients (done)
 
 **Status, October 2026.** Code in commit `1a27c28`; results in `results/m1_ideal-summary` and
-`results/m1_noisy-summary`; the full table is in the README under "Gradient comparison".
+`results/m1_noisy-summary`; the full table is in [`experiments/legacy_m0_m1_m2.md`](experiments/legacy_m0_m1_m2.md) under
+"Gradient comparison" (formerly in the README).
 
 | check | result |
 |---|---|
@@ -356,7 +357,7 @@ Original plan:
 **Status, October 2026.** Code in `c9272e3` (techniques), `56aadd3` (correct-then-filter,
 noise-source switch) and `2116da4` (one-off measurements redone per repeat). Results in
 `results/m2c-evaluation-0`, `results/m2c-evaluation-0p3`, `results/m2c_readout-evaluation-0p3`,
-`results/m2c_gates-evaluation-0p3` and `results/m2b_vqe-summary`. Full tables are in the README
+`results/m2c_gates-evaluation-0p3` and `results/m2b_vqe-summary`. Full tables are in [`experiments/legacy_m0_m1_m2.md`](experiments/legacy_m0_m1_m2.md) (formerly in the README)
 under "Error mitigation".
 
 | check | result |

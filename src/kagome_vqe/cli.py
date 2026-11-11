@@ -20,7 +20,7 @@ from __future__ import annotations
 import json
 import logging
 from pathlib import Path
-from typing import Annotated, Any
+from typing import TYPE_CHECKING, Annotated, Any
 
 import typer
 from rich.console import Console
@@ -35,7 +35,10 @@ from kagome_vqe.config import (
     apply_overrides,
     load_toml,
 )
-from kagome_vqe.logging import attach_file_handler, configure_logging
+from kagome_vqe.logging import configure_logging
+
+if TYPE_CHECKING:
+    from kagome_vqe.vqe import VQERunResult
 
 app = typer.Typer(
     help="VQE for the kagome Heisenberg antiferromagnet.",
@@ -234,8 +237,8 @@ def run(
 
 
 def _run_one(cfg: RunConfig, *, dry_run: bool, progress: bool) -> Path | None:
-    from kagome_vqe.results import new_run_dir, save_run
-    from kagome_vqe.vqe import TraceRow, prepare, run_vqe
+    from kagome_vqe.results import RunFailedError, run_and_save
+    from kagome_vqe.vqe import TraceRow, prepare
 
     settings = Settings()
     if cfg.backend.kind == "ibm" and not settings.has_credentials:
@@ -246,30 +249,41 @@ def _run_one(cfg: RunConfig, *, dry_run: bool, progress: bool) -> Path | None:
         _print_json(prepared.summary())
         return None
 
-    run_dir = new_run_dir(cfg)
-    handler = attach_file_handler(run_dir / "run.log")
-    try:
-        total = prepared.projected_evaluations
-        with Progress(
-            TextColumn("[bold]{task.description}"),
-            BarColumn(),
-            TextColumn("{task.completed}/{task.total}" if total else "{task.completed}"),
-            TextColumn("E={task.fields[energy]:.5f}"),
-            TimeElapsedColumn(),
-            console=console,
-            disable=not progress,
-        ) as bar:
-            task = bar.add_task(cfg.name, total=total, energy=float("nan"))
+    total = prepared.projected_evaluations
+    if cfg.budget.max_evaluations is not None:
+        total = min(total or cfg.budget.max_evaluations, cfg.budget.max_evaluations)
+    with Progress(
+        TextColumn("[bold]{task.description}"),
+        BarColumn(),
+        TextColumn("{task.completed}/{task.total}" if total else "{task.completed}"),
+        TextColumn("E={task.fields[energy]:.5f}"),
+        TimeElapsedColumn(),
+        console=console,
+        disable=not progress,
+    ) as bar:
+        task = bar.add_task(cfg.name, total=total, energy=float("nan"))
 
-            def on_eval(row: TraceRow) -> None:
-                bar.update(task, advance=1, energy=row.energy)
+        def on_eval(row: TraceRow) -> None:
+            bar.update(task, advance=1, energy=row.energy)
 
-            result = run_vqe(cfg, prepared=prepared, settings=settings, on_evaluation=on_eval)
-        save_run(result, run_dir)
-    finally:
-        logging.getLogger().removeHandler(handler)
-        handler.close()
+        captured: list[VQERunResult] = []
+        try:
+            run_dir = run_and_save(
+                cfg,
+                prepared=prepared,
+                settings=settings,
+                on_evaluation=on_eval,
+                on_result=lambda result, _: captured.append(result),
+            )
+        except RunFailedError as exc:
+            console.print(f"[red]{exc}[/red]")
+            raise typer.Exit(code=1) from exc
+    _print_result(captured[0], run_dir)
+    return run_dir
 
+
+def _print_result(result: VQERunResult, run_dir: Path) -> None:
+    cfg = result.config
     table = Table(title=f"{cfg.name} on {cfg.backend.label()}")
     table.add_column("quantity")
     table.add_column("value")
@@ -280,13 +294,82 @@ def _run_one(cfg: RunConfig, *, dry_run: bool, progress: bool) -> Path | None:
         f"{result.final_energy:.6f} (std bound {result.final_std:.3f})",
     )
     table.add_row("relative error", f"{100 * result.final_relative_error:.4f} %")
+    if result.ideal_energy is not None and not cfg.backend.is_exact:
+        table.add_row("noise-free energy of final params", f"{result.ideal_energy:.6f}")
+    if result.ideal_fidelity is not None:
+        table.add_row("ground-space fidelity", f"{result.ideal_fidelity:.4f}")
     table.add_row("trace minimum (biased low)", f"{result.best_energy:.6f}")
     table.add_row("evaluations / iterations", f"{result.nfev} / {result.nit}")
     table.add_row("total shots", f"{result.total_shots:,}")
+    table.add_row("termination", result.optimizer_message)
     table.add_row("wall time", f"{result.wall_time_s:.1f} s")
     table.add_row("saved to", str(run_dir))
     console.print(table)
-    return run_dir
+
+
+@app.command()
+def replay(
+    run_dir: Annotated[
+        Path, typer.Argument(help="A results directory.", exists=True, file_okay=False)
+    ],
+    set_: SetOption = None,
+    no_progress: Annotated[bool, typer.Option("--no-progress", help="Hide the bar.")] = False,
+    verbose: Verbose = False,
+) -> None:
+    """Re-run a saved experiment from its config.toml into a new results directory.
+
+    The original directory is never modified. With no --set overrides, a statevector run
+    reproduces the original final energy exactly; shot-based runs reproduce it for the same
+    package versions (see the saved environment.json).
+    """
+    from kagome_vqe.results import load_run
+
+    configure_logging(logging.DEBUG if verbose else logging.INFO)
+    cfg = RunConfig.model_validate(_load(run_dir / "config.toml", set_, None))
+    new_dir = _run_one(cfg, dry_run=False, progress=not no_progress)
+    if new_dir is None or not (run_dir / "result.json").exists():
+        return
+    before, after = load_run(run_dir), load_run(new_dir)
+    delta = after.result["final_energy"] - before.result["final_energy"]
+    console.print(
+        f"final energy: original {before.result['final_energy']:.8f}, replay "
+        f"{after.result['final_energy']:.8f} (difference {delta:+.2e})"
+    )
+
+
+@app.command()
+def params(
+    run_dir: Annotated[
+        Path, typer.Argument(help="A results directory.", exists=True, file_okay=False)
+    ],
+    out: Annotated[
+        Path | None, typer.Option(help="Write the vector to this .npy (or .txt) file.")
+    ] = None,
+) -> None:
+    """Print (or export) the optimised parameters of a saved run, for reuse elsewhere."""
+    from kagome_vqe.results import load_optimal_params, load_run
+
+    run = load_run(run_dir)
+    theta = load_optimal_params(run_dir)
+    if out is None:
+        _print_json(
+            {
+                "run": run.name,
+                "ansatz": run.config.ansatz.model_dump(mode="json"),
+                "lattice": run.config.lattice.model_dump(mode="json", exclude_none=True),
+                "num_parameters": int(theta.size),
+                "final_energy": run.result.get("final_energy"),
+                "optimal_params": theta.tolist(),
+            }
+        )
+        return
+    import numpy as np
+
+    if out.suffix == ".npy":
+        np.save(out, theta)
+    else:
+        np.savetxt(out, theta)
+    console.print(f"wrote {theta.size} parameters to {out}")
 
 
 # -- benchmark --------------------------------------------------------------------------------
@@ -367,6 +450,89 @@ def _evaluate_benchmark(bench: BenchmarkConfig, point: float, repeats: int) -> N
     json_path, md_path = write_evaluation_summary(summaries, out_dir)
     console.print(md_path.read_text())
     console.print(f"summary: {json_path}")
+
+
+# -- study ------------------------------------------------------------------------------------
+
+
+@app.command()
+def study(
+    config: Annotated[Path, typer.Argument(help="Study config TOML.", exists=True, dir_okay=False)],
+    resume: Annotated[
+        Path | None,
+        typer.Option(
+            help="Continue this study directory (skips its completed runs).",
+            exists=True,
+            file_okay=False,
+        ),
+    ] = None,
+    only: Annotated[
+        list[str] | None,
+        typer.Option(help="Only runs whose name contains this text (repeatable)."),
+    ] = None,
+    max_runs: Annotated[
+        int | None, typer.Option(help="Start at most this many runs, then summarise.")
+    ] = None,
+    time_limit: Annotated[
+        float | None, typer.Option(help="Start no new run after this many minutes.")
+    ] = None,
+    dry_run: Annotated[
+        bool,
+        typer.Option("--dry-run", help="Print the run plan and a timed cost estimate only."),
+    ] = False,
+    output_dir: Annotated[
+        Path | None,
+        typer.Option(help="Parent of the new study directory (default: output_dir in CONFIG)."),
+    ] = None,
+    verbose: Verbose = False,
+) -> None:
+    """Run a multi-seed experiment matrix (lattice x p x H0 x backend x optimiser x seed).
+
+    Every run is saved as an ordinary results directory under <study>/runs/; the study's
+    summary (tables, report.md, figures) is written to <study>/summary/. Interrupted
+    studies continue with --resume.
+    """
+    from kagome_vqe.study import estimate_study, load_study_config, run_study
+
+    configure_logging(logging.DEBUG if verbose else logging.INFO)
+    cfg = load_study_config(config)
+    if dry_run:
+        frame, totals = estimate_study(cfg)
+        cols = [
+            "name",
+            "num_parameters",
+            "maxiter",
+            "evaluation_budget",
+            "shots_budget",
+            "seconds_per_evaluation",
+            "estimated_seconds",
+        ]
+        console.print(frame[cols].to_string(index=False))
+        _print_json(totals)
+        return
+    study_dir = run_study(
+        cfg,
+        study_dir=resume,
+        root=output_dir,
+        only=only,
+        max_runs=max_runs,
+        time_limit_s=None if time_limit is None else 60 * time_limit,
+    )
+    console.print(f"study directory: {study_dir}")
+    console.print(f"report: {study_dir / 'summary' / 'report.md'}")
+
+
+@app.command(name="study-summary")
+def study_summary(
+    study_dir: Annotated[
+        Path, typer.Argument(help="A study directory.", exists=True, file_okay=False)
+    ],
+) -> None:
+    """Regenerate a study's summary tables, report and figures from its saved runs."""
+    from kagome_vqe.study import summarise_study
+
+    configure_logging(logging.INFO)
+    console.print(f"wrote {summarise_study(study_dir)}")
 
 
 # -- plot -------------------------------------------------------------------------------------

@@ -1,0 +1,53 @@
+# Smoke profile of the graph_hva optimiser study: checks configuration, execution, resource
+# accounting, persistence and plotting in about a minute. Not a scientific comparison.
+#
+#   uv run kagome-vqe study configs/studies/graph_hva_optimizer_smoke.toml --dry-run
+#   uv run kagome-vqe study configs/studies/graph_hva_optimizer_smoke.toml
+#
+# The optimiser blocks are the same as in graph_hva_optimizer_full.toml; only the matrix and
+# the budgets are smaller.
+name = "graph_hva_opt_smoke"
+description = """
+Smoke test: PRB 105 2x6 rectangle (open), graph_hva p = 1 without H0 (16 parameters), one
+seed, three optimisers on the exact statevector and the two shot-based ones on aer_ideal.
+"""
+seeds = [1]
+x0_scale = 0.1
+reps = [1]
+include_h0 = [false]
+success_threshold = 0.01
+
+[ansatz]
+type = "graph_hva"
+
+[[lattices]]
+label = "bm2x6"
+lattice = { kind = "kagome_bm_rectangle", rows = 2, cols = 6 }
+schedule = "prb105"
+
+# Experiment A: noiseless.
+[[backends]]
+label = "sv"
+backend = { kind = "statevector" }
+budget = { max_evaluations = 300 }
+
+# Experiment B: finite shots, no physical noise (aer_ideal), no mitigation.
+[[backends]]
+label = "shots256"
+backend = { kind = "aer_ideal", shots = 256, final_shots = 4096 }
+budget = { max_shots = 153600 }   # = 200 evaluations x 256 shots x 3 bases
+
+[[optimizers]]
+label = "lbfgsb"
+backends = ["sv"]
+optimizer = { type = "scipy", method = "L-BFGS-B", maxiter = 100000, options = { maxfun = 1000000000 } }
+
+[[optimizers]]
+label = "spsa_cal"
+fit_maxiter_to_budget = true
+optimizer = { type = "spsa", calibrate = true, perturbation = 0.1, calibration_samples = 25, target_magnitude = 0.2 }
+
+[[optimizers]]
+label = "adam_spsa"
+fit_maxiter_to_budget = true
+optimizer = { type = "adam", gradient = "spsa", lr = 0.02, perturbation = 0.1 }

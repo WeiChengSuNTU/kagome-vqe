@@ -1,0 +1,61 @@
+# Hyperparameter pilot for the graph_hva optimiser study. It uses its own seed (101), which no
+# comparison profile uses, so settings are not chosen on the seeds they are later judged on.
+#
+#   uv run kagome-vqe study configs/studies/graph_hva_optimizer_pilot.toml
+#
+# Question: with the initial point near the dimer state (x0 uniform in [0, 0.1)), what first
+# step (calibrated SPSA target_magnitude) and what ADAM learning rate are sensible? The
+# library default target_magnitude = 2 pi / 10 was designed for random starts.
+name = "graph_hva_opt_pilot"
+description = """
+Pilot (seed 101 only) for calibrated SPSA target_magnitude and ADAM+SPSA learning rate on
+the PRB 105 2x6 rectangle, p = 2 without H0 (32 parameters), exact statevector, 3000
+evaluations each. Used only to choose hyperparameters for the comparison profiles.
+"""
+seeds = [101]
+x0_scale = 0.1
+reps = [2]
+include_h0 = [false]
+
+[ansatz]
+type = "graph_hva"
+
+[[lattices]]
+label = "bm2x6"
+lattice = { kind = "kagome_bm_rectangle", rows = 2, cols = 6 }
+schedule = "prb105"
+
+[[backends]]
+label = "sv"
+backend = { kind = "statevector" }
+budget = { max_evaluations = 3000 }
+
+[[optimizers]]
+label = "spsa_cal_t0.628"
+fit_maxiter_to_budget = true
+optimizer = { type = "spsa", calibrate = true, perturbation = 0.1 }
+
+[[optimizers]]
+label = "spsa_cal_t0.2"
+fit_maxiter_to_budget = true
+optimizer = { type = "spsa", calibrate = true, perturbation = 0.1, target_magnitude = 0.2 }
+
+[[optimizers]]
+label = "spsa_cal_t0.05"
+fit_maxiter_to_budget = true
+optimizer = { type = "spsa", calibrate = true, perturbation = 0.1, target_magnitude = 0.05 }
+
+[[optimizers]]
+label = "adam_spsa_lr0.005"
+fit_maxiter_to_budget = true
+optimizer = { type = "adam", gradient = "spsa", lr = 0.005, perturbation = 0.1 }
+
+[[optimizers]]
+label = "adam_spsa_lr0.02"
+fit_maxiter_to_budget = true
+optimizer = { type = "adam", gradient = "spsa", lr = 0.02, perturbation = 0.1 }
+
+[[optimizers]]
+label = "adam_spsa_lr0.05"
+fit_maxiter_to_budget = true
+optimizer = { type = "adam", gradient = "spsa", lr = 0.05, perturbation = 0.1 }

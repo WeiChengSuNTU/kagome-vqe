@@ -9,8 +9,22 @@ A results directory ``results/<UTC timestamp>-<name>/`` contains::
     ideal_trace.csv    noise-free energy after every iteration vs shots spent (optional)
     environment.json   package versions, Python, platform, git commit
     run.log            the log of the run (attached by the CLI)
+    status.json        "running", "completed" or "failed" (+ error); written by run_and_save
 
 Everything is plain text or numpy so it can be analysed without this package.
+
+:func:`run_and_save` is the one entry point that runs a configuration and persists it; the
+CLI and the benchmark runners all use it. It writes ``config.toml``, ``environment.json`` and
+``status.json`` *before* the optimisation starts, so a run that crashes or is interrupted
+still leaves its configuration, provenance, log and (``partial_trace.csv``) the evaluations it
+completed. Result directories are never reused: :func:`new_run_dir` adds a counter on a name
+clash. Directories written before ``status.json`` existed load as completed.
+
+``result.json`` schema 2 (this version) adds ``seed``, ``num_parameters``, ``resources``
+(evaluations split into calibration / optimiser / re-measurement, shots, budget, timing)
+and ``metadata`` (the built lattice with every bond, boundary, dimers; ansatz structure;
+optimiser and the gradient estimator actually used; termination reason). Readers treat all
+of these as optional, so schema-1 directories keep loading.
 """
 
 from __future__ import annotations
@@ -21,7 +35,8 @@ import platform
 import re
 import subprocess
 import sys
-from collections.abc import Hashable
+import traceback
+from collections.abc import Callable, Hashable, Iterator
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from importlib.metadata import PackageNotFoundError, version
@@ -32,20 +47,30 @@ import numpy as np
 import pandas as pd
 import tomli_w
 
-from kagome_vqe.config import RunConfig, load_toml
-from kagome_vqe.vqe import TraceRow, VQERunResult
+from kagome_vqe.config import RunConfig, Settings, load_toml
+from kagome_vqe.logging import attach_file_handler
+from kagome_vqe.vqe import Prepared, TraceRow, VQERunResult, run_vqe
 
 __all__ = [
+    "RESULT_SCHEMA_VERSION",
     "LoadedRun",
+    "RunFailedError",
     "environment_info",
+    "find_runs",
+    "load_optimal_params",
     "load_run",
     "new_run_dir",
+    "read_status",
+    "run_and_save",
     "save_run",
+    "start_run",
     "write_benchmark_summary",
     "write_evaluation_summary",
 ]
 
 log = logging.getLogger(__name__)
+
+RESULT_SCHEMA_VERSION = 2
 
 _TRACKED_PACKAGES = (
     "kagome-vqe",
@@ -101,7 +126,11 @@ def new_run_dir(cfg: RunConfig, root: Path | None = None) -> Path:
 
 def _result_dict(result: VQERunResult) -> dict[str, Any]:
     return {
+        "schema_version": RESULT_SCHEMA_VERSION,
+        "status": "completed",
         "name": result.config.name,
+        "seed": result.config.seed,
+        "num_parameters": int(result.optimal_params.size),
         "final_energy": result.final_energy,
         "final_std": result.final_std,
         "final_shots": result.final_shots,
@@ -129,6 +158,8 @@ def _result_dict(result: VQERunResult) -> dict[str, Any]:
         "backend": result.config.backend.label(),
         "isa": result.isa_stats,
         "estimator": result.estimator,
+        "resources": result.resources,
+        "metadata": result.metadata,
     }
 
 
@@ -146,9 +177,180 @@ def save_run(result: VQERunResult, run_dir: Path) -> Path:
         pd.DataFrame([asdict(p) for p in result.ideal_trace]).to_csv(
             run_dir / "ideal_trace.csv", index=False
         )
-    (run_dir / "environment.json").write_text(json.dumps(environment_info(), indent=2) + "\n")
+    if not (run_dir / "environment.json").exists():  # start_run wrote it at the start
+        _write_json(run_dir / "environment.json", environment_info())
+    partial = run_dir / "partial_trace.csv"
+    if partial.exists():
+        partial.unlink()
+    status = read_status(run_dir) or {}
+    _write_json(
+        run_dir / "status.json",
+        {**status, "status": "completed", "finished_utc": _now()},
+    )
     log.info("saved run to %s", run_dir)
     return run_dir
+
+
+def _now() -> str:
+    return datetime.now(UTC).isoformat(timespec="seconds")
+
+
+def _write_json(path: Path, data: Any) -> None:
+    path.write_text(json.dumps(data, indent=2, default=str) + "\n")
+
+
+def start_run(cfg: RunConfig, run_dir: Path) -> Path:
+    """Record a run before it starts: ``config.toml``, ``environment.json``, ``status.json``.
+
+    Whatever happens afterwards, the directory then says what was attempted, on which code.
+    """
+    run_dir = Path(run_dir)
+    run_dir.mkdir(parents=True, exist_ok=True)
+    with (run_dir / "config.toml").open("wb") as fh:
+        tomli_w.dump(cfg.to_toml_dict(), fh)
+    _write_json(run_dir / "environment.json", environment_info())
+    _write_json(
+        run_dir / "status.json", {"status": "running", "name": cfg.name, "started_utc": _now()}
+    )
+    return run_dir
+
+
+def read_status(run_dir: Path) -> dict[str, Any] | None:
+    """Contents of ``status.json``, or ``None`` for directories that predate it."""
+    path = Path(run_dir) / "status.json"
+    if not path.exists():
+        return None
+    data: dict[str, Any] = json.loads(path.read_text())
+    return data
+
+
+class RunFailedError(RuntimeError):
+    """A run raised; its directory holds the configuration, log and partial trace."""
+
+    def __init__(self, run_dir: Path, cause: BaseException) -> None:
+        """Wrap ``cause``, remembering where the partial results are."""
+        super().__init__(f"run failed ({type(cause).__name__}: {cause}); see {run_dir}")
+        self.run_dir = run_dir
+
+
+def _save_failure(run_dir: Path, exc: BaseException, rows: list[TraceRow]) -> None:
+    if rows:
+        pd.DataFrame([asdict(r) for r in rows]).to_csv(run_dir / "partial_trace.csv", index=False)
+    status = read_status(run_dir) or {}
+    _write_json(
+        run_dir / "status.json",
+        {
+            **status,
+            "status": "interrupted" if isinstance(exc, KeyboardInterrupt) else "failed",
+            "finished_utc": _now(),
+            "error_type": type(exc).__name__,
+            "error": str(exc),
+            "traceback": traceback.format_exception(exc),
+            "completed_evaluations": len(rows),
+            "best_partial_energy": min((r.energy for r in rows), default=None),
+        },
+    )
+
+
+def run_and_save(
+    cfg: RunConfig,
+    *,
+    root: Path | None = None,
+    prepared: Prepared | None = None,
+    settings: Settings | None = None,
+    on_evaluation: Callable[[TraceRow], None] | None = None,
+    on_result: Callable[[VQERunResult, Path], None] | None = None,
+) -> Path:
+    """Run ``cfg`` and persist it into a fresh ``<root>/<timestamp>-<name>/`` directory.
+
+    The directory is created and filled with the configuration, environment and a ``running``
+    status before the optimisation starts; ``run.log`` captures the run's log. On success the
+    full artefacts are written and the status becomes ``completed``. On any exception
+    (including Ctrl-C) the evaluations completed so far go to ``partial_trace.csv``, the
+    status becomes ``failed`` (``interrupted``) with the traceback, and
+    :class:`RunFailedError` (or the ``KeyboardInterrupt``) propagates.
+
+    Args:
+        cfg: Run configuration.
+        root: Parent directory; defaults to ``cfg.output_dir``.
+        prepared: Output of :func:`kagome_vqe.vqe.prepare`, if already built.
+        settings: IBM credentials.
+        on_evaluation: Called after every energy evaluation.
+        on_result: Called with the result and directory after saving (summaries, printing).
+
+    Returns:
+        The run directory.
+    """
+    run_dir = start_run(cfg, new_run_dir(cfg, root))
+    handler = attach_file_handler(run_dir / "run.log")
+    rows: list[TraceRow] = []
+
+    def collect(row: TraceRow) -> None:
+        rows.append(row)
+        if on_evaluation is not None:
+            on_evaluation(row)
+
+    try:
+        result = run_vqe(cfg, prepared=prepared, settings=settings, on_evaluation=collect)
+        save_run(result, run_dir)
+    except KeyboardInterrupt as exc:
+        _save_failure(run_dir, exc, rows)
+        raise
+    except Exception as exc:
+        log.exception("%s failed; partial results in %s", cfg.name, run_dir)
+        _save_failure(run_dir, exc, rows)
+        raise RunFailedError(run_dir, exc) from exc
+    finally:
+        logging.getLogger().removeHandler(handler)
+        handler.close()
+    if on_result is not None:
+        on_result(result, run_dir)
+    return run_dir
+
+
+def find_runs(root: Path, *, status: str | None = "completed") -> Iterator[Path]:
+    """Result directories below ``root`` (any depth), sorted by path.
+
+    Args:
+        root: Directory to search.
+        status: Keep only runs with this status (``None`` keeps all). Directories without
+            ``status.json`` count as ``completed`` if they contain ``result.json``.
+    """
+    for config in sorted(Path(root).rglob("config.toml")):
+        run_dir = config.parent
+        info = read_status(run_dir)
+        state = (
+            info.get("status", "unknown")
+            if info is not None
+            else ("completed" if (run_dir / "result.json").exists() else "unknown")
+        )
+        if status is None or state == status:
+            yield run_dir
+
+
+def load_optimal_params(run_dir: Path, *, num_parameters: int | None = None) -> np.ndarray:
+    """The optimised parameter vector of a saved run, for reuse without re-optimising.
+
+    For example, to study noise or mitigation at a converged point::
+
+        theta = load_optimal_params(run_dir)
+        cfg = load_run(run_dir).config.model_copy(update={"backend": noisy_backend})
+        evaluate_fixed(cfg, theta)
+
+    Args:
+        run_dir: A results directory.
+        num_parameters: If given, check the vector has this length (the ansatz it will be
+            bound to), and raise ``ValueError`` otherwise.
+    """
+    result = json.loads((Path(run_dir) / "result.json").read_text())
+    theta = np.asarray(result["optimal_params"], dtype=float)
+    if num_parameters is not None and theta.size != num_parameters:
+        msg = (
+            f"{run_dir} holds {theta.size} parameters but the target ansatz has "
+            f"{num_parameters}; check lattice, reps, include_h0 and parameterization"
+        )
+        raise ValueError(msg)
+    return theta
 
 
 @dataclass(slots=True)
@@ -166,6 +368,34 @@ class LoadedRun:
     def name(self) -> str:
         """Run name."""
         return str(self.result["name"])
+
+    @property
+    def status(self) -> str:
+        """``"completed"`` for any directory with a result (older ones have no status file)."""
+        info = read_status(self.path)
+        return "completed" if info is None else str(info.get("status", "completed"))
+
+    @property
+    def optimal_params(self) -> np.ndarray:
+        """Final (optimised) parameters."""
+        return np.asarray(self.result["optimal_params"], dtype=float)
+
+    @property
+    def x0(self) -> np.ndarray:
+        """Initial parameters."""
+        return np.asarray(self.result["x0"], dtype=float)
+
+    @property
+    def resources(self) -> dict[str, Any]:
+        """Resource accounting (empty for schema-1 results)."""
+        data: dict[str, Any] = self.result.get("resources", {})
+        return data
+
+    @property
+    def metadata(self) -> dict[str, Any]:
+        """Built lattice / ansatz / optimiser description (empty for schema-1 results)."""
+        data: dict[str, Any] = self.result.get("metadata", {})
+        return data
 
     @property
     def combo(self) -> str:
@@ -199,8 +429,17 @@ class LoadedRun:
 
 
 def load_run(run_dir: Path) -> LoadedRun:
-    """Read a results directory."""
+    """Read a completed results directory.
+
+    Raises:
+        FileNotFoundError: The run has no ``result.json``, i.e. it failed or is still running;
+            :func:`read_status` then tells which.
+    """
     run_dir = Path(run_dir)
+    if not (run_dir / "result.json").exists():
+        info = read_status(run_dir) or {}
+        msg = f"{run_dir} has no result.json (status: {info.get('status', 'unknown')})"
+        raise FileNotFoundError(msg)
     config = RunConfig.model_validate(load_toml(run_dir / "config.toml"))
     result = json.loads((run_dir / "result.json").read_text())
     trace = pd.read_csv(run_dir / "trace.csv")

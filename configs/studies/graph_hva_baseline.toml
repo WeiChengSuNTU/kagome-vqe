@@ -1,0 +1,46 @@
+# Reproduces the graph_hva baseline table (docs/experiments/graph_hva_baseline.md) with full
+# per-run persistence: L-BFGS-B on the exact statevector, two seeds, x0 uniform in [0, 0.1).
+# 36 runs, about 1-2 CPU-hours.
+#
+#   uv run kagome-vqe study configs/studies/graph_hva_baseline.toml
+#
+# The original 2026-11-10 sweep (benchmarks/graph_hva_vqe_sweep.py, JSONL only) used scipy's
+# default maxfun = 15000, which stopped every p >= 3 run. That limit is kept here, explicitly,
+# so the table is reproduced; raise `options.maxfun` for converged numbers.
+name = "graph_hva_baseline"
+description = """
+L-BFGS-B baseline for graph_hva on the 12-site star (p = 1), the PRB 105 2x6 rectangle
+(p = 1-4) and the 12-site torus (p = 1-4), with and without H0, seeds 1 and 2.
+"""
+seeds = [1, 2]
+x0_scale = 0.1
+reps = [1, 2, 3, 4]
+include_h0 = [false, true]
+record_params = false
+
+[ansatz]
+type = "graph_hva"
+
+[[lattices]]
+label = "star"
+lattice = { kind = "kagome_unit_cell" }
+schedule = "greedy"
+reps = [1]
+
+[[lattices]]
+label = "bm2x6"
+lattice = { kind = "kagome_bm_rectangle", rows = 2, cols = 6 }
+schedule = "prb105"
+
+[[lattices]]
+label = "torus2x2"
+lattice = { kind = "kagome_periodic", rows = 2, cols = 2 }
+schedule = "greedy"
+
+[[backends]]
+label = "sv"
+backend = { kind = "statevector" }
+
+[[optimizers]]
+label = "lbfgsb"
+optimizer = { type = "scipy", method = "L-BFGS-B", maxiter = 400, options = { maxfun = 15000 } }

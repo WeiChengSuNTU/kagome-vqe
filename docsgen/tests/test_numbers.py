@@ -179,8 +179,9 @@ def test_numbers_files_are_current(registry: numbers.Registry) -> None:
 
 @needs_results
 def test_m1_means_match_readme(registry: numbers.Registry) -> None:
-    """The README's gradient table quotes the same means (its spread convention may differ)."""
-    readme = (ROOT / "README.md").read_text()
+    """The M1 gradient table (moved from the README to the legacy experiments document in
+    November 2026, unchanged) quotes the same means (its spread convention may differ)."""
+    readme = (ROOT / "docs" / "experiments" / "legacy_m0_m1_m2.md").read_text()
     pattern = re.compile(r"\| (HVA|RVB) \| ([^|]+?) \| (\d+) \| ([\d.]+) % ± ([\d.]+) \|")
     labels = {
         "ADAM, forward differences (the paper)": "Fwd",

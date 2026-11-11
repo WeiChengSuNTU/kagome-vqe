@@ -1,0 +1,83 @@
+# Full research profile of the graph_hva optimiser study. NOT run automatically: 280 runs,
+# about 17 hours sequentially as an upper bound (`--dry-run` on 2026-11-11, 8 threads:
+# bm2x6 statevector 5.4 h, bm2x6 finite shots 7.7 h, star control 3.8 h; 2.2 M evaluations,
+# 1.84 G shots). `--only bm2x6` skips the control. Run it in chunks:
+#
+#   uv run kagome-vqe study configs/studies/graph_hva_optimizer_full.toml --dry-run
+#   uv run kagome-vqe study configs/studies/graph_hva_optimizer_full.toml --time-limit 60
+#   uv run kagome-vqe study configs/studies/graph_hva_optimizer_full.toml \
+#       --resume results/<timestamp>-graph_hva_opt_full --time-limit 60      # repeat
+#   uv run kagome-vqe study configs/studies/graph_hva_optimizer_full.toml \
+#       --only shots1024 ...                                                 # one experiment
+#
+# Runs are ordered lattice, p, H0, backend, seed, optimiser, so a partial study always holds
+# complete optimiser comparisons for the seeds it finished.
+name = "graph_hva_opt_full"
+description = """
+Full comparison on the PRB 105 2x6 rectangle (open, 12 sites, 20 bonds), graph_hva with one
+parameter per gate, p = 1, 2, 3, with and without H0, seeds 1-5; the 12-site star (p = 1)
+as a regression control. Experiment A: exact statevector, 10000 evaluations per run.
+Experiment B: aer_ideal with 1024 shots per basis (sampling noise only, no gate or readout
+noise, no mitigation), 15,360,000 shots per run (5000 evaluations x 1024 x 3 bases) plus one
+16384-shot re-measurement. Hyperparameters from the seed-101 pilot; `spsa_cal_default` (library
+default first step 2 pi / 10) is kept as a sensitivity arm on the statevector.
+"""
+seeds = [1, 2, 3, 4, 5]
+x0_scale = 0.1
+reps = [1, 2, 3]
+include_h0 = [false, true]
+success_threshold = 0.01
+
+[ansatz]
+type = "graph_hva"
+
+[[lattices]]
+label = "bm2x6"
+lattice = { kind = "kagome_bm_rectangle", rows = 2, cols = 6 }
+schedule = "prb105"
+
+# Control: the star's dimer-product ground state is reachable at p = 1 by every reasonable
+# optimiser; a failure here signals a bug, not an optimiser property.
+[[lattices]]
+label = "star"
+lattice = { kind = "kagome_unit_cell" }
+schedule = "greedy"
+reps = [1]
+
+[[backends]]
+label = "sv"
+backend = { kind = "statevector" }
+budget = { max_evaluations = 10000 }
+
+[[backends]]
+label = "shots1024"
+backend = { kind = "aer_ideal", shots = 1024, final_shots = 16384 }
+budget = { max_shots = 15360000 }
+
+[[optimizers]]
+label = "lbfgsb"
+backends = ["sv"]
+optimizer = { type = "scipy", method = "L-BFGS-B", maxiter = 100000, options = { maxfun = 1000000000 } }
+
+# Diagnostic only: L-BFGS-B on shot-noisy energies with a finite-difference step far above
+# the noise-dominated default 1e-8. Expected to stop early (line-search failures).
+[[optimizers]]
+label = "lbfgsb_fd0.1"
+backends = ["shots1024"]
+optimizer = { type = "scipy", method = "L-BFGS-B", maxiter = 100000, options = { maxfun = 1000000000, eps = 0.1 } }
+
+[[optimizers]]
+label = "spsa_cal"
+fit_maxiter_to_budget = true
+optimizer = { type = "spsa", calibrate = true, perturbation = 0.1, calibration_samples = 25, target_magnitude = 0.2 }
+
+[[optimizers]]
+label = "spsa_cal_default"
+backends = ["sv"]
+fit_maxiter_to_budget = true
+optimizer = { type = "spsa", calibrate = true, perturbation = 0.1, calibration_samples = 25 }
+
+[[optimizers]]
+label = "adam_spsa"
+fit_maxiter_to_budget = true
+optimizer = { type = "adam", gradient = "spsa", lr = 0.02, perturbation = 0.1 }

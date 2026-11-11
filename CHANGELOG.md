@@ -8,6 +8,47 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- Experiment persistence and reproducibility (`docs/architecture.md`):
+  - `results.run_and_save`: the single run-and-persist entry point (CLI `run`, `benchmark`,
+    `replay`, `study`, benchmark scripts). Writes `config.toml`, `environment.json` and
+    `status.json` before the run; on failure or Ctrl-C keeps `partial_trace.csv` and records
+    the error (`RunFailedError`). `start_run`, `read_status`, `find_runs`,
+    `load_optimal_params`; `LoadedRun.status`, `.optimal_params`, `.x0`, `.resources`,
+    `.metadata`.
+  - `result.json` schema 2: `seed`, `num_parameters`, `resources` (calibration / optimiser /
+    re-measurement evaluations, shots, budget, timings with noise-free tracking separated) and
+    `metadata` (built lattice with every bond, boundary, dimers; ansatz structure; optimiser
+    and the gradient estimator actually used; termination reason). Schema-1 directories load
+    unchanged.
+  - `[budget] max_evaluations / max_shots` (`BudgetConfig`) on runs and benchmarks, enforced
+    on every energy request; a budget stop keeps the last completed iterate.
+  - `kagome-vqe replay DIR`, `kagome-vqe params DIR [--out]`.
+- Multi-seed experiment matrices (`kagome_vqe.study`, `kagome-vqe study`, `study-summary`):
+  lattices x p x H0 x backends x optimisers x seeds from TOML, per-backend budgets,
+  `fit_maxiter_to_budget`, resumable studies with a manifest, timed `--dry-run` estimates,
+  generated tables, Markdown report and figures. Profiles in `configs/studies/`: optimiser
+  smoke, pilot, representative and full profiles, and the graph_hva baseline.
+- `OptimizerConfig`: ADAM `beta1`, `beta2`, `amsgrad`; calibrated-SPSA `alpha`, `gamma`,
+  `stability_constant`, `calibration_samples`, `target_magnitude`; scipy `options`;
+  `gradient_description()`. `Spsa.calibration_evaluations`, `calibrated_learning_rate`.
+- Documentation reorganised: README is an overview; `docs/architecture.md`,
+  `docs/hardware.md` and `docs/experiments/` (`legacy_m0_m1_m2.md`, moved unchanged from the
+  README; `graph_hva_baseline.md`; `graph_hva_optimizers.md`). The raw output of the original
+  36-run graph_hva sweep is preserved in `docs/experiments/data/`.
+
+### Changed
+
+- `benchmarks/graph_hva_vqe_sweep.py` runs through the study system and saves every run; its
+  JSONL output is unchanged apart from a new `path` key. Its L-BFGS-B `maxfun = 15000`, which
+  was scipy's implicit default, is now explicit.
+
+### Fixed
+
+- `ScipyOptimizer` evaluated the objective once more per iteration (for its history) than it
+  reported in `nfev`; the callback now receives scipy's intermediate result. This inflated
+  the evaluation cost of every scipy method in resource comparisons; optimisation paths are
+  unchanged.
+
 - Generalised lattices and the graph-based HVA (`docs/graph_hva.md`):
   - `Lattice` gains optional triangular-lattice `coords`, `boundary`, `wrapped_bonds` and a
     validated `dimers` covering; `find_dimer_covering`, `count_dimer_coverings`.

@@ -78,12 +78,18 @@ class ScipyOptimizer:
             nfev += 1
             return fn(x)
 
-        def on_iteration(intermediate: Any) -> None:
-            nonlocal nit
+        # The parameter must be called ``intermediate_result``: scipy then passes an
+        # OptimizeResult carrying ``fun``. Under any other name it passes only ``x``, and the
+        # value would cost one extra objective evaluation per iteration (inflating the cost of
+        # every scipy method in resource comparisons). Methods that still pass only ``x`` fall
+        # back to that extra evaluation, which the objective's own trace then accounts for.
+        def on_iteration(intermediate_result: Any) -> None:
+            nonlocal nit, nfev
             nit += 1
-            x = np.asarray(getattr(intermediate, "x", intermediate), dtype=float)
-            value = float(getattr(intermediate, "fun", np.nan))
+            x = np.asarray(getattr(intermediate_result, "x", intermediate_result), dtype=float)
+            value = float(getattr(intermediate_result, "fun", np.nan))
             if np.isnan(value):
+                nfev += 1
                 value = fn(x)
             history.append(value)
             if callback is not None:

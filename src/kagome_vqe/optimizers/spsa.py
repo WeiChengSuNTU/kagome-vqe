@@ -78,6 +78,10 @@ class Spsa:
         self._cal_samples = calibration_samples
         self._target = target_magnitude
         self._rng = seed if isinstance(seed, np.random.Generator) else np.random.default_rng(seed)
+        self.calibration_evaluations = 0
+        """Evaluations the last :meth:`minimize` spent on calibration (0 without it)."""
+        self.calibrated_learning_rate: float | None = None
+        """The ``a`` calibration chose in the last :meth:`minimize`, if it ran."""
 
     @property
     def name(self) -> str:
@@ -92,6 +96,16 @@ class Spsa:
     def evaluations_per_iteration(self, num_parameters: int) -> int:
         """Always 2."""
         return 2
+
+    @property
+    def calibrate(self) -> bool:
+        """Whether gains are calibrated."""
+        return self._calibrate
+
+    @property
+    def calibration_cost(self) -> int:
+        """Evaluations calibration will spend (``2 * calibration_samples``, or 0)."""
+        return 2 * self._cal_samples if self._calibrate else 0
 
     def _direction(self, n: int) -> FloatArray:
         """A random ``+-1`` vector (Bernoulli, the standard SPSA choice)."""
@@ -112,6 +126,7 @@ class Spsa:
         magnitudes = []
         for _ in range(self._cal_samples):
             grad, *_ = self._probe(fn, x0, self._c)
+            self.calibration_evaluations += 2  # kept current even if a budget stops us here
             magnitudes.append(float(np.linalg.norm(grad)))
         avg = float(np.mean(magnitudes))
         a = self._target / avg * (self._A + 1) ** self._alpha if avg > 0 else self._a
@@ -133,9 +148,12 @@ class Spsa:
         x = np.array(x0, dtype=float)
         nfev = 0
         a = self._a
+        self.calibration_evaluations = 0
+        self.calibrated_learning_rate = None
         if self._calibrate:
             a, used = self._calibrated_a(fn, x)
             nfev += used
+            self.calibrated_learning_rate = a
         history: list[float] = []
         k = 0
         for k in range(1, self._maxiter + 1):

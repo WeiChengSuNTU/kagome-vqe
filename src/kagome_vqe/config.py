@@ -53,6 +53,7 @@ __all__ = [
     "BackendConfig",
     "BackendKind",
     "BenchmarkConfig",
+    "BudgetConfig",
     "ComboConfig",
     "LatticeConfig",
     "LatticeKind",
@@ -374,6 +375,11 @@ class MappingConfig(_Frozen):
         return self.strategy
 
 
+_SCIPY_GRADIENT_METHODS = frozenset(
+    {"L-BFGS-B", "BFGS", "CG", "SLSQP", "TNC", "TRUST-CONSTR", "NEWTON-CG"}
+)
+
+
 class OptimizerConfig(_Frozen):
     """Classical optimiser settings.
 
@@ -390,6 +396,17 @@ class OptimizerConfig(_Frozen):
         calibrate: SPSA: derive decaying gains automatically instead of fixed ``lr``.
         method: scipy method name.
         tol: Convergence tolerance (ADAM update norm / scipy ``tol``).
+        beta1: ADAM first-moment decay.
+        beta2: ADAM second-moment decay.
+        amsgrad: ADAM: use the AMSGrad variant.
+        alpha: Calibrated SPSA learning-rate decay exponent (Spall's 0.602).
+        gamma: Calibrated SPSA perturbation decay exponent (Spall's 0.101).
+        stability_constant: Calibrated SPSA ``A``; ``None`` means ``0.1 * maxiter``.
+        calibration_samples: Calibrated SPSA gradient probes (each costs 2 evaluations, which
+            are counted in the run's evaluations and shots).
+        target_magnitude: Calibrated SPSA first-step size; ``None`` means ``2 pi / 10``.
+        options: Extra scipy ``options`` (for example ``eps`` for L-BFGS-B's finite-difference
+            step, which must be far above ``1e-8`` with shot-noisy energies, or ``maxfun``).
     """
 
     type: Literal["adam", "gd", "spsa", "scipy"] = "adam"
@@ -401,6 +418,15 @@ class OptimizerConfig(_Frozen):
     calibrate: bool = False
     method: str = "COBYLA"
     tol: float | None = None
+    beta1: Annotated[float, Field(ge=0, lt=1)] = 0.9
+    beta2: Annotated[float, Field(ge=0, lt=1)] = 0.99
+    amsgrad: bool = False
+    alpha: Annotated[float, Field(gt=0)] = 0.602
+    gamma: Annotated[float, Field(gt=0)] = 0.101
+    stability_constant: Annotated[float, Field(ge=0)] | None = None
+    calibration_samples: Annotated[int, Field(ge=1)] = 25
+    target_magnitude: Annotated[float, Field(gt=0)] | None = None
+    options: dict[str, float | int | bool | str] = Field(default_factory=dict)
 
     @property
     def uses_parameter_shift(self) -> bool:
@@ -438,18 +464,58 @@ class OptimizerConfig(_Frozen):
             return Adam(
                 maxiter=self.maxiter,
                 lr=self.lr,
+                beta1=self.beta1,
+                beta2=self.beta2,
                 gradient=gradient,
                 tol=1e-6 if self.tol is None else self.tol,
+                amsgrad=self.amsgrad,
             )
         if self.type == "spsa":
+            extra = (
+                {} if self.target_magnitude is None else {"target_magnitude": self.target_magnitude}
+            )
             return Spsa(
                 maxiter=self.maxiter,
                 learning_rate=self.lr,
                 perturbation=self.perturbation,
                 calibrate=self.calibrate,
+                alpha=self.alpha,
+                gamma=self.gamma,
+                stability_constant=self.stability_constant,
+                calibration_samples=self.calibration_samples,
                 seed=rng,
+                **extra,
             )
-        return ScipyOptimizer(method=self.method, maxiter=self.maxiter, tol=self.tol)
+        return ScipyOptimizer(
+            method=self.method, maxiter=self.maxiter, tol=self.tol, options=self.options
+        )
+
+    def gradient_description(self) -> str:
+        """The gradient information the optimiser actually uses, for result files.
+
+        Recorded with every run so that, for example, ``adam`` with the default forward
+        difference can never be mistaken for the ADAM + SPSA-gradient hybrid.
+        """
+        if self.type in ("adam", "gd"):
+            detail = {
+                "forward": f"forward difference (step {self.fd_eps:g}), n + 1 energies",
+                "central": f"central difference (step {self.fd_eps:g}), 2n + 1 energies",
+                "spsa": f"simultaneous perturbation (c = {self.perturbation:g}), 2 energies",
+                "parameter_shift": "parameter shift, 2 energies per gate occurrence",
+            }[self.gradient]
+            return f"{self.gradient}: {detail}"
+        if self.type == "spsa":
+            schedule = (
+                f"calibrated gains (alpha {self.alpha:g}, gamma {self.gamma:g}, "
+                f"{self.calibration_samples} calibration probes)"
+                if self.calibrate
+                else "constant gains"
+            )
+            return f"spsa: built-in two-point estimate (c = {self.perturbation:g}), {schedule}"
+        if self.method.upper() in _SCIPY_GRADIENT_METHODS:
+            eps = self.options.get("eps", "scipy default 1e-8")
+            return f"scipy 2-point finite difference (eps = {eps}), n + 1 energies per gradient"
+        return "none (derivative-free)"
 
 
 class BackendConfig(_Frozen):
@@ -611,6 +677,30 @@ class MitigationConfig(_Frozen):
         return "+".join(parts) or "none"
 
 
+class BudgetConfig(_Frozen):
+    """Hard resource limits for the optimisation, enforced on every energy request.
+
+    A batch that would take the run past a limit is refused before it is evaluated; the run
+    then ends with the parameters of the last completed optimiser iteration and the
+    termination reason ``"budget exhausted"``. Everything the optimiser requests counts,
+    including SPSA calibration probes and the optimisers' own final evaluation. The single
+    re-measurement of the final parameters (``backend.final_shots``) is outside the budget but
+    is included in the run's reported ``total_shots``, the same for every optimiser.
+
+    Attributes:
+        max_evaluations: Energy evaluations (one parameter vector each).
+        max_shots: Circuit shots over all measurement bases (shot-based backends only).
+    """
+
+    max_evaluations: Annotated[int, Field(ge=1)] | None = None
+    max_shots: Annotated[int, Field(ge=1)] | None = None
+
+    @property
+    def enabled(self) -> bool:
+        """Whether any limit is set."""
+        return self.max_evaluations is not None or self.max_shots is not None
+
+
 class RunConfig(_Frozen):
     """Everything needed for one reproducible VQE run.
 
@@ -631,6 +721,8 @@ class RunConfig(_Frozen):
             measures parameter quality independently of noise, which is the fair way to
             compare optimisers on noisy backends. Classical cost; skipped above 20 qubits.
         mitigation: Error mitigation, see :class:`MitigationConfig`.
+        mapping: Hardware mapping, see :class:`MappingConfig`.
+        budget: Resource limits, see :class:`BudgetConfig`.
     """
 
     name: str = "run"
@@ -645,6 +737,7 @@ class RunConfig(_Frozen):
     track_ideal_energy: bool = True
     mitigation: MitigationConfig = MitigationConfig()
     mapping: MappingConfig = MappingConfig()
+    budget: BudgetConfig = BudgetConfig()
 
     @model_validator(mode="after")
     def _mitigation_fits(self) -> Self:
@@ -656,6 +749,9 @@ class RunConfig(_Frozen):
             raise ValueError(msg)
         if self.mapping.strategy != "generic" and self.backend.initial_layout is not None:
             msg = "backend.initial_layout is for generic routing; use mapping.physical_layout"
+            raise ValueError(msg)
+        if self.budget.max_shots is not None and self.backend.is_exact:
+            msg = "budget.max_shots needs a shot-based backend; use budget.max_evaluations"
             raise ValueError(msg)
         return self
 
@@ -734,6 +830,7 @@ class BenchmarkConfig(_Frozen):
     track_ideal_energy: bool = True
     mitigation: MitigationConfig = MitigationConfig()
     mapping: MappingConfig = MappingConfig()
+    budget: BudgetConfig = BudgetConfig()
     combos: list[ComboConfig] = Field(default_factory=_paper_combos)
 
     def run_configs(self) -> list[RunConfig]:
@@ -762,6 +859,7 @@ class BenchmarkConfig(_Frozen):
                         track_ideal_energy=self.track_ideal_energy,
                         mitigation=combo.mitigation or self.mitigation,
                         mapping=combo.mapping or self.mapping,
+                        budget=self.budget,
                     )
                 )
         return runs

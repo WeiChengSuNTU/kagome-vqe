@@ -4,6 +4,11 @@ This document describes the `graph_hva` ansatz, the configurable lattice layer, 
 paper-inspired hardware mappings. Everything here is additive: the ring ansatzes `hva` and
 `rvb`, the 12-site defaults and every existing config behave exactly as before.
 
+Experiments with these tools are written up separately: the L-BFGS-B depth sweep in
+[`experiments/graph_hva_baseline.md`](experiments/graph_hva_baseline.md), the optimiser
+comparison in [`experiments/graph_hva_optimizers.md`](experiments/graph_hva_optimizers.md)
+and the compile-only mapping benchmarks in [`hardware.md`](hardware.md).
+
 References (PDFs in `references/KagomeHVA/`):
 
 - **PRB 105** - J. L. Bosse and A. Montanaro, *Probing ground-state properties of the kagome
