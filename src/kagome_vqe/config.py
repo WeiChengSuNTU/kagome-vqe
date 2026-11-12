@@ -57,6 +57,7 @@ __all__ = [
     "ComboConfig",
     "LatticeConfig",
     "LatticeKind",
+    "LogicalNoiseConfig",
     "MappingConfig",
     "MitigationConfig",
     "OptimizerConfig",
@@ -71,7 +72,7 @@ __all__ = [
     "parse_override",
 ]
 
-BackendKind = Literal["statevector", "aer_ideal", "aer_noisy", "fake", "ibm"]
+BackendKind = Literal["statevector", "aer_ideal", "aer_noisy", "logical_noise", "fake", "ibm"]
 """Where energies are evaluated.
 
 ``statevector``
@@ -81,7 +82,12 @@ BackendKind = Literal["statevector", "aer_ideal", "aer_noisy", "fake", "ibm"]
     Aer shot-based simulation without noise.
 ``aer_noisy``
     Aer with the noise model and coupling map of the fake backend ``name``. Fast enough for the
-    benchmark; this is what "FakeXXX simulator" means in practice.
+    benchmark; this is what "FakeXXX simulator" means in practice. The noise acts on the
+    *compiled* circuit (native gates, routing SWAPs, readout): "compiled hardware noise".
+``logical_noise``
+    Local Pauli noise in the PRB 106 convention on the *logical* ``graph_hva`` circuit: the
+    channel of ``backend.logical_noise`` on every qubit after the singlet preparation and after
+    every exchange-gate layer. No routing and no native gates ("paper-layer noise"); shot-based.
 ``fake``
     The fake backend ``name`` driven through ``qiskit_ibm_runtime``'s local testing mode, i.e.
     exactly the code path used for ``ibm`` (options, resilience levels, sessions) minus the
@@ -407,6 +413,10 @@ class OptimizerConfig(_Frozen):
         target_magnitude: Calibrated SPSA first-step size; ``None`` means ``2 pi / 10``.
         options: Extra scipy ``options`` (for example ``eps`` for L-BFGS-B's finite-difference
             step, which must be far above ``1e-8`` with shot-noisy energies, or ``maxfun``).
+        max_step_norm: SPSA only, optional step control: rescale any update whose Euclidean
+            norm exceeds this value to that norm. ``None`` (default) leaves SPSA unchanged.
+        clip_update: SPSA only, optional step control: clip each component of the update to
+            ``[-clip_update, clip_update]``. ``None`` (default) leaves SPSA unchanged.
     """
 
     type: Literal["adam", "gd", "spsa", "scipy"] = "adam"
@@ -427,6 +437,15 @@ class OptimizerConfig(_Frozen):
     calibration_samples: Annotated[int, Field(ge=1)] = 25
     target_magnitude: Annotated[float, Field(gt=0)] | None = None
     options: dict[str, float | int | bool | str] = Field(default_factory=dict)
+    max_step_norm: Annotated[float, Field(gt=0)] | None = None
+    clip_update: Annotated[float, Field(gt=0)] | None = None
+
+    @model_validator(mode="after")
+    def _step_control_is_spsa(self) -> Self:
+        if self.type != "spsa" and (self.max_step_norm is not None or self.clip_update is not None):
+            msg = "optimizer.max_step_norm / clip_update only apply to type = 'spsa'"
+            raise ValueError(msg)
+        return self
 
     @property
     def uses_parameter_shift(self) -> bool:
@@ -483,6 +502,8 @@ class OptimizerConfig(_Frozen):
                 gamma=self.gamma,
                 stability_constant=self.stability_constant,
                 calibration_samples=self.calibration_samples,
+                max_step_norm=self.max_step_norm,
+                clip_update=self.clip_update,
                 seed=rng,
                 **extra,
             )
@@ -511,11 +532,44 @@ class OptimizerConfig(_Frozen):
                 if self.calibrate
                 else "constant gains"
             )
+            control = []
+            if self.max_step_norm is not None:
+                control.append(f"step norm capped at {self.max_step_norm:g}")
+            if self.clip_update is not None:
+                control.append(f"update components clipped to +-{self.clip_update:g}")
+            if control:
+                schedule += ", " + ", ".join(control)
             return f"spsa: built-in two-point estimate (c = {self.perturbation:g}), {schedule}"
         if self.method.upper() in _SCIPY_GRADIENT_METHODS:
             eps = self.options.get("eps", "scipy default 1e-8")
             return f"scipy 2-point finite difference (eps = {eps}), n + 1 energies per gradient"
         return "none (derivative-free)"
+
+
+class LogicalNoiseConfig(_Frozen):
+    """Local noise on the logical circuit, in the convention of PRB 106 (Sec. II D).
+
+    Attributes:
+        channel: ``"depolarizing"`` (``(1 - p) rho + p/3 (X rho X + Y rho Y + Z rho Z)``) or
+            ``"bit_flip"`` (``(1 - p) rho + p X rho X``).
+        probability: The paper's error probability ``p_e`` per qubit and location. A logical
+            model parameter, not an IBM device error rate.
+        placement: ``"paper_layers"``: every qubit after the singlet preparation and after every
+            exchange-gate layer (``n (|c| p + 1)`` locations). The only placement implemented;
+            the field exists so a per-gate placement can be added without changing old files.
+        engine: ``"trajectories"`` (Pauli-error sampling per shot; only shots with an error are
+            simulated) or ``"aer"`` (the same circuit on Aer, density matrices up to 12
+            qubits). Both sample measurement outcomes shot by shot.
+    """
+
+    channel: Literal["depolarizing", "bit_flip"] = "depolarizing"
+    probability: Annotated[float, Field(ge=0, le=1)] = 1e-3
+    placement: Literal["paper_layers"] = "paper_layers"
+    engine: Literal["trajectories", "aer"] = "trajectories"
+
+    def label(self) -> str:
+        """``"depolarizing p=0.001"``."""
+        return f"{self.channel} p={self.probability:g}"
 
 
 class BackendConfig(_Frozen):
@@ -547,6 +601,7 @@ class BackendConfig(_Frozen):
             0.50) or ``"executor"`` (its client-side successor).
         retries: How many times a failed/timed-out runtime job is resubmitted.
         job_timeout_s: Seconds to wait for a single runtime job's result.
+        logical_noise: Required for and only allowed with ``kind = "logical_noise"``.
     """
 
     kind: BackendKind = "statevector"
@@ -563,9 +618,16 @@ class BackendConfig(_Frozen):
     job_timeout_s: Annotated[int, Field(ge=1)] = 3600
     aer_method: Literal["auto", "density_matrix", "statevector", "matrix_product_state"] = "auto"
     noise: Literal["full", "readout", "gates"] = "full"
+    logical_noise: LogicalNoiseConfig | None = None
 
     @model_validator(mode="after")
     def _needs_name_and_shots(self) -> Self:
+        if (self.kind == "logical_noise") != (self.logical_noise is not None):
+            msg = "backend.logical_noise is required for and only allowed with kind 'logical_noise'"
+            raise ValueError(msg)
+        if self.kind == "logical_noise" and (self.name or self.initial_layout is not None):
+            msg = "kind='logical_noise' runs the logical circuit: no backend.name or initial_layout"
+            raise ValueError(msg)
         if self.kind in ("aer_noisy", "fake", "ibm") and not self.name:
             msg = f"backend.kind={self.kind!r} requires backend.name"
             raise ValueError(msg)
@@ -596,6 +658,8 @@ class BackendConfig(_Frozen):
 
     def label(self) -> str:
         """Short label for file names, e.g. ``"aer_noisy:FakeGuadalupeV2"``."""
+        if self.logical_noise is not None:
+            return f"{self.kind}[{self.logical_noise.label()}]"
         base = self.kind if self.name is None else f"{self.kind}:{self.name}"
         return base if self.noise == "full" else f"{base}[{self.noise} noise]"
 
@@ -753,6 +817,19 @@ class RunConfig(_Frozen):
         if self.budget.max_shots is not None and self.backend.is_exact:
             msg = "budget.max_shots needs a shot-based backend; use budget.max_evaluations"
             raise ValueError(msg)
+        if self.backend.kind == "logical_noise":
+            problems = []
+            if self.ansatz.type != "graph_hva":
+                problems.append("ansatz.type = 'graph_hva' (noise locations are its layers)")
+            if self.mapping.strategy != "generic":
+                problems.append("mapping.strategy = 'generic' (the logical circuit is not routed)")
+            if self.optimizer.uses_parameter_shift:
+                problems.append("a gradient other than parameter_shift")
+            if self.mitigation.enabled:
+                problems.append("no mitigation (not supported on logical noise yet)")
+            if problems:
+                msg = "backend.kind='logical_noise' needs " + "; ".join(problems)
+                raise ValueError(msg)
         return self
 
     @field_validator("name")

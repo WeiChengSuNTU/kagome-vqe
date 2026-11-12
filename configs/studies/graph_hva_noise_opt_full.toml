@@ -1,0 +1,85 @@
+# Full noisy-optimiser research profile: CONFIGURED, NOT EXECUTED during development.
+# Estimate first, then run in bounded, resumable chunks (one process per disjoint --only filter
+# with --no-summary; regenerate the summary with `kagome-vqe study-summary <dir>`):
+#
+#   uv run kagome-vqe study configs/studies/graph_hva_noise_opt_full.toml --dry-run
+#   uv run kagome-vqe study configs/studies/graph_hva_noise_opt_full.toml --time-limit 120
+#   uv run kagome-vqe study configs/studies/graph_hva_noise_opt_full.toml \
+#       --resume results/<timestamp>-graph_hva_noise_full --time-limit 120
+#
+# The dry-run estimate (single process, no contention) is in
+# docs/experiments/graph_hva_noisy_optimizers.md; the paper-layer backends dominate it. p = 3 and
+# H0-on cells are new optimisations, not reuse of saved parameters.
+name = "graph_hva_noise_full"
+description = """
+Full noisy-optimiser study: PRB 105 2x6 rectangle (open), graph_hva p = 2 and 3, H0 off and on,
+seeds 1-5 (seed 101 is the pilot and never appears here). Backends: noise-free statevector
+(10,000 evaluations); Aer without noise and PRB 106 paper-layer depolarising noise at
+p_e = 1e-4, 3e-4, 1e-3 and bit-flip noise at p_e = 1e-3, all with 1024 shots per basis and
+the same budget of 9,216,000 shots (3000 energies x 1024 x 3 bases) plus a 16384-shot
+re-measurement. Optimisers: calibrated SPSA without and with the step-norm cap, ADAM with the
+SPSA gradient; L-BFGS-B as the noise-free reference.
+"""
+seeds = [1, 2, 3, 4, 5]
+x0_scale = 0.1
+reps = [2, 3]
+include_h0 = [false, true]
+success_threshold = 0.01
+
+[ansatz]
+type = "graph_hva"
+
+[[lattices]]
+label = "bm2x6"
+lattice = { kind = "kagome_bm_rectangle", rows = 2, cols = 6 }
+schedule = "prb105"
+
+[[backends]]
+label = "sv"
+backend = { kind = "statevector" }
+budget = { max_evaluations = 10000 }
+
+[[backends]]
+label = "shots1024"
+backend = { kind = "aer_ideal", shots = 1024, final_shots = 16384 }
+budget = { max_shots = 9216000 }
+
+[[backends]]
+label = "dep0.0001"
+backend = { kind = "logical_noise", shots = 1024, final_shots = 16384, logical_noise = { channel = "depolarizing", probability = 1e-4 } }
+budget = { max_shots = 9216000 }
+
+[[backends]]
+label = "dep0.0003"
+backend = { kind = "logical_noise", shots = 1024, final_shots = 16384, logical_noise = { channel = "depolarizing", probability = 3e-4 } }
+budget = { max_shots = 9216000 }
+
+[[backends]]
+label = "dep0.001"
+backend = { kind = "logical_noise", shots = 1024, final_shots = 16384, logical_noise = { channel = "depolarizing", probability = 1e-3 } }
+budget = { max_shots = 9216000 }
+
+[[backends]]
+label = "bf0.001"
+backend = { kind = "logical_noise", shots = 1024, final_shots = 16384, logical_noise = { channel = "bit_flip", probability = 1e-3 } }
+budget = { max_shots = 9216000 }
+
+[[optimizers]]
+label = "lbfgsb"
+backends = ["sv"]
+optimizer = { type = "scipy", method = "L-BFGS-B", maxiter = 100000, options = { maxfun = 1000000000 } }
+
+[[optimizers]]
+label = "spsa_cal"
+fit_maxiter_to_budget = true
+optimizer = { type = "spsa", calibrate = true, perturbation = 0.1, calibration_samples = 25, target_magnitude = 0.2 }
+
+[[optimizers]]
+label = "spsa_cap0.2"
+fit_maxiter_to_budget = true
+optimizer = { type = "spsa", calibrate = true, perturbation = 0.1, calibration_samples = 25, target_magnitude = 0.2, max_step_norm = 0.2 }
+
+[[optimizers]]
+label = "adam_spsa"
+fit_maxiter_to_budget = true
+optimizer = { type = "adam", gradient = "spsa", lr = 0.02, perturbation = 0.1 }

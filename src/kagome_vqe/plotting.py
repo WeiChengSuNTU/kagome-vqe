@@ -16,7 +16,13 @@ from matplotlib.figure import Figure
 
 from kagome_vqe.results import LoadedRun
 
-__all__ = ["plot_convergence", "plot_ideal_vs_shots", "plot_runs", "plot_study_figures"]
+__all__ = [
+    "plot_convergence",
+    "plot_ideal_vs_shots",
+    "plot_noise_analysis",
+    "plot_runs",
+    "plot_study_figures",
+]
 
 Axis = Literal["evaluation", "iteration"]
 Trace = Sequence[float] | NDArray[np.floating[Any]]
@@ -259,7 +265,9 @@ def plot_study_figures(study_dir: Path, runs: Any, out_dir: Path) -> list[Path]:
                 if ax.get_legend_handles_labels()[0]:
                     ax.legend(fontsize=7)
             axes[0][0].set_ylabel("Noise-free relative energy error of iterate")
-            fig.suptitle(f"graph_hva optimisers on {backend}: median and min-max over seeds")
+            fig.suptitle(
+                f"graph_hva optimisers on {backend}\nmedian and min-max over seeds", fontsize=10
+            )
             written.append(_save(fig, out_dir / f"{stem}-{backend}.png"))
     for lattice, frame in runs.groupby("lattice", sort=True):
         written.append(_fidelity_figure(str(lattice), frame, colours, out_dir))
@@ -332,3 +340,69 @@ def _seed_figure(
     handles, labels = ax.get_legend_handles_labels()
     ax.legend(handles, labels, fontsize=7)
     return _save(fig, out_dir / f"seeds-{lattice}.png")
+
+
+def plot_noise_analysis(points: Any, out_dir: Path) -> list[Path]:
+    """Figures of a fixed-parameter noise analysis (:mod:`kagome_vqe.noise_analysis`).
+
+    Per channel, against the error probability ``p_e`` (log-log), one line per source
+    (optimiser, depth ``p``, seed):
+
+    * ``infidelity-<channel>.png``: simulated infidelity ``1 - Tr(P_GS rho)`` (exact density
+      matrix where available, else the trajectory mean with its 95 % CI) as markers, and the
+      PRB 106 Eq. 9 estimate ``1 - (1 - p_e)^(n d) F0`` as a dashed line of the same colour;
+    * ``energy_error-<channel>.png``: relative error of the noisy energy, with the noise-free
+      error of the same parameters as a dotted horizontal line.
+    """
+    out_dir = Path(out_dir)
+    written: list[Path] = []
+    points = points[points["p"] > 0]
+    for channel, frame in points.groupby("channel", sort=True):
+        sources = list(frame.groupby(["source_optimizer", "reps", "seed"], sort=True))
+        colours = {key: plt.get_cmap("tab10")(k % 10) for k, (key, _) in enumerate(sources)}
+        fig_f, ax_f = plt.subplots(figsize=(6.4, 4.6))
+        fig_e, ax_e = plt.subplots(figsize=(6.4, 4.6))
+        for key, unsorted in sources:
+            group = unsorted.sort_values("p")
+            colour = colours[key]
+            label = f"{key[0]} p={key[1]} s{key[2]}"
+            ps = group["p"].to_numpy(dtype=float)
+            if "exact_noisy_infidelity" in group and group["exact_noisy_infidelity"].notna().all():
+                infid = group["exact_noisy_infidelity"].to_numpy(dtype=float)
+                ax_f.plot(ps, infid, "o", color=colour, label=f"{label} (exact)")
+            else:
+                infid = group["traj_infidelity"].to_numpy(dtype=float)
+                low = 1 - group["traj_fidelity_ci_high"].to_numpy(dtype=float)
+                high = 1 - group["traj_fidelity_ci_low"].to_numpy(dtype=float)
+                ax_f.errorbar(
+                    ps,
+                    infid,
+                    yerr=[infid - low, high - infid],
+                    fmt="s",
+                    color=colour,
+                    capsize=3,
+                    label=f"{label} (trajectories)",
+                )
+            ax_f.plot(ps, group["eq9_infidelity"], "--", color=colour, alpha=0.8)
+            col = (
+                "exact_noisy_relative_error"
+                if "exact_noisy_relative_error" in group
+                and group["exact_noisy_relative_error"].notna().all()
+                else "traj_relative_error"
+            )
+            ax_e.plot(ps, group[col], "o-", color=colour, label=label)
+            ax_e.axhline(float(group["ideal_relative_error"].iloc[0]), color=colour, ls=":")
+        for ax, ylabel in (
+            (ax_f, "Infidelity 1 - F (dashed: PRB 106 Eq. 9)"),
+            (ax_e, "Relative energy error (dotted: noise-free)"),
+        ):
+            ax.set_xscale("log")
+            ax.set_yscale("log")
+            ax.set_xlabel(f"Error probability p_e ({channel}, paper-layer noise)")
+            ax.set_ylabel(ylabel)
+            ax.grid(True, which="both", alpha=0.3)
+            if ax.get_legend_handles_labels()[0]:
+                ax.legend(fontsize=7)
+        written.append(_save(fig_f, out_dir / f"infidelity-{channel}.png"))
+        written.append(_save(fig_e, out_dir / f"energy_error-{channel}.png"))
+    return written

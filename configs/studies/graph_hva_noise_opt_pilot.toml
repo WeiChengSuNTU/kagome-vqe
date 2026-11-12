@@ -1,0 +1,57 @@
+# Pilot for the noisy optimiser study: seed 101 only (never used in the comparisons).
+# Question: does calibrated SPSA's early excursion get worse under paper-layer noise, and does
+# an optional step-norm cap (max_step_norm) remove it? Candidates: no control (the previous
+# study's setting), cap at the calibrated first-step size 0.2, and a tighter cap 0.1. ADAM +
+# SPSA gradient with the previous study's lr = 0.02 is the reference.
+#
+#   uv run kagome-vqe study configs/studies/graph_hva_noise_opt_pilot.toml
+name = "graph_hva_noise_pilot"
+description = """
+Pilot (seed 101): PRB 105 2x6 rectangle, graph_hva p = 2 without H0 (32 parameters). Noise-free
+statevector (3000 evaluations) and local depolarising noise p_e = 1e-3 in the PRB 106 layer
+convention with 1024 shots per basis (4,608,000 shots). Calibrated SPSA without and with a
+step-norm cap; ADAM with the SPSA gradient.
+"""
+seeds = [101]
+x0_scale = 0.1
+reps = [2]
+include_h0 = [false]
+success_threshold = 0.01
+
+[ansatz]
+type = "graph_hva"
+
+[[lattices]]
+label = "bm2x6"
+lattice = { kind = "kagome_bm_rectangle", rows = 2, cols = 6 }
+schedule = "prb105"
+
+[[backends]]
+label = "sv"
+backend = { kind = "statevector" }
+budget = { max_evaluations = 3000 }
+
+[[backends]]
+label = "dep0.001"
+backend = { kind = "logical_noise", shots = 1024, final_shots = 16384, logical_noise = { channel = "depolarizing", probability = 1e-3 } }
+budget = { max_shots = 4608000 }
+
+[[optimizers]]
+label = "spsa_cal"
+fit_maxiter_to_budget = true
+optimizer = { type = "spsa", calibrate = true, perturbation = 0.1, calibration_samples = 25, target_magnitude = 0.2 }
+
+[[optimizers]]
+label = "spsa_cap0.2"
+fit_maxiter_to_budget = true
+optimizer = { type = "spsa", calibrate = true, perturbation = 0.1, calibration_samples = 25, target_magnitude = 0.2, max_step_norm = 0.2 }
+
+[[optimizers]]
+label = "spsa_cap0.1"
+fit_maxiter_to_budget = true
+optimizer = { type = "spsa", calibrate = true, perturbation = 0.1, calibration_samples = 25, target_magnitude = 0.2, max_step_norm = 0.1 }
+
+[[optimizers]]
+label = "adam_spsa"
+fit_maxiter_to_budget = true
+optimizer = { type = "adam", gradient = "spsa", lr = 0.02, perturbation = 0.1 }

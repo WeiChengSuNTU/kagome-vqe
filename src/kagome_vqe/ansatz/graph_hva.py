@@ -65,7 +65,10 @@ from kagome_vqe.ansatz.hva import heisenberg_bond
 from kagome_vqe.lattice import Lattice, find_dimer_covering
 from kagome_vqe.schedule import ExchangeSchedule, greedy_schedule
 
-__all__ = ["GateSpec", "GraphHVAnsatz", "H0Position", "Parameterization"]
+__all__ = ["NOISE_MARK", "GateSpec", "GraphHVAnsatz", "H0Position", "Parameterization"]
+
+NOISE_MARK = "noise_location"
+"""Label of the barriers :meth:`GraphHVAnsatz.build` places at the PRB 106 noise locations."""
 
 Parameterization = Literal["opg", "per_layer"]
 H0Position = Literal["start", "end"]
@@ -340,17 +343,42 @@ class GraphHVAnsatz:
             return tuple(specs)
         return tuple(replace(g, pruned=g.phase_only) for g in specs)
 
-    def build(self) -> QuantumCircuit:
-        """Construct the logical circuit (a fresh object on every call)."""
+    @property
+    def noise_layers(self) -> int:
+        """Noise locations per qubit in the PRB 106 convention: ``d = |c| p + 1``.
+
+        One after the singlet preparation and one after every layer of exchange gates; with H0
+        the H0 block of each cycle is one more layer. Pruned (phase-only) gates do not remove a
+        location: the layer still occupies a time step.
+        """
+        per_cycle = self._schedule.num_layers + (1 if self._include_h0 else 0)
+        return per_cycle * self._reps + 1
+
+    def build(self, *, mark_noise_locations: bool = False) -> QuantumCircuit:
+        """Construct the logical circuit (a fresh object on every call).
+
+        Args:
+            mark_noise_locations: Insert a barrier labelled :data:`NOISE_MARK` after the
+                singlet preparation and after every gate layer (:attr:`noise_layers` in
+                total). :func:`kagome_vqe.noise.insert_layer_noise` replaces them with noise
+                channels. Barriers change no state; without the flag the circuit is unchanged.
+        """
         circuit = QuantumCircuit(self.num_qubits, name=self.name)
         for a, b in self.qubit_dimers:
             singlet_pair(circuit, a, b)
         params: dict[str, Parameter] = {}
+        previous: tuple[int, str, int] | None = None
         for gate in self._gates:
+            block = (gate.cycle, gate.kind, gate.layer)
+            if mark_noise_locations and block != previous:
+                circuit.barrier(label=NOISE_MARK)
+            previous = block
             if gate.pruned:
                 continue
             theta = params.setdefault(gate.parameter, Parameter(gate.parameter))
             heisenberg_bond(circuit, theta, *gate.qubits)
+        if mark_noise_locations:
+            circuit.barrier(label=NOISE_MARK)
         return circuit
 
     def __repr__(self) -> str:

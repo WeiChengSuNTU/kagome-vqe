@@ -8,6 +8,32 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- PRB 106 paper-layer noise (`docs/experiments/graph_hva_noise.md`):
+  - `kagome_vqe.noise`: depolarising and bit-flip channels in the paper's parametrisation
+    (Eqs. 7-8), `PauliChannel` circuit instruction, `layer_noise_circuit` (channel on every
+    qubit after the singlets and after every exchange layer, `n (|c| p + 1)` locations),
+    `PauliTrajectorySimulator` (per-shot Pauli errors; only erroneous shots are simulated),
+    `exact_noisy_state` (Aer density matrix, up to 12 qubits).
+  - Backend kind `logical_noise` with `[backend.logical_noise] channel / probability /
+    placement / engine` (`LogicalNoiseConfig`) and the `LogicalNoiseEnergy` estimator
+    (trajectory or Aer engine); logical circuit, never routed. `aer_noisy` stays the compiled
+    hardware-noise mode.
+  - `GraphHVAnsatz.build(mark_noise_locations=True)`, `GraphHVAnsatz.noise_layers`.
+  - Fixed-parameter analysis `kagome_vqe.noise_analysis`, CLI `noise-analysis` (with
+    `--dry-run`) and `noise-summary`: saved optimal parameters, exact and trajectory noisy
+    energy and ground-space fidelity with bootstrap CIs, PRB 106 Eq. 9, optional measured
+    energy and optional `aer_noisy` comparison; configs in `configs/noise/`.
+- Noisy optimisation (`docs/experiments/graph_hva_noisy_optimizers.md`): study profiles
+  `graph_hva_noise_opt_{smoke,pilot,representative,full}.toml` and the noise-free p = 3
+  reference `graph_hva_noise_reference.toml`.
+- Optional SPSA step control, off by default: `optimizer.max_step_norm`, `clip_update`;
+  `Spsa.step_norms`, `raw_step_norms`, `controlled_steps`, `schedule()`.
+- Run results record `iterates.npy` (parameters after every iteration), `step_norm` in
+  `ideal_trace.csv`, `metadata.noise` (mode, channel, placement, locations),
+  `metadata.optimizer.hyperparameters` and `.steps`, `resources.circuit_executions`. Study
+  summaries add measured versus noise-free error, peak (excursion) error and step sizes.
+- `kagome-vqe study --no-summary` for several processes sharing one study directory.
+
 - Experiment persistence and reproducibility (`docs/architecture.md`):
   - `results.run_and_save`: the single run-and-persist entry point (CLI `run`, `benchmark`,
     `replay`, `study`, benchmark scripts). Writes `config.toml`, `environment.json` and
@@ -38,6 +64,8 @@ All notable changes to this project are documented here. The format follows
 
 ### Changed
 
+- Documentation: the PRB 105 2x6 rectangle has 16 bonds, not 20 (README, baseline and
+  optimiser write-ups, full optimiser profile description). No result changes.
 - `benchmarks/graph_hva_vqe_sweep.py` runs through the study system and saves every run; its
   JSONL output is unchanged apart from a new `path` key. Its L-BFGS-B `maxfun = 15000`, which
   was scipy's implicit default, is now explicit.

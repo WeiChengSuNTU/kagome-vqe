@@ -1,0 +1,29 @@
+# Fixed-parameter noise analysis in the PRB 106 methodology (Secs. II E, III B; Figs. 8-10):
+# noise-free L-BFGS-B optima of the PRB 105 2x6 rectangle, evaluated (not re-optimised) under
+# paper-layer depolarising and bit-flip noise at the paper's p_e = 1e-2 ... 1e-5.
+# Sources (local results/, not in git):
+#   p = 1, 2, seeds 1-3: configs/studies/graph_hva_optimizer_representative.toml (sv, lbfgsb)
+#   p = 3, seed 1:       configs/studies/graph_hva_noise_reference.toml --only s1
+#
+#   uv run kagome-vqe noise-analysis configs/noise/graph_hva_noise_fixed_prb106.toml --dry-run
+#   uv run kagome-vqe noise-analysis configs/noise/graph_hva_noise_fixed_prb106.toml
+name = "graph_hva_noise_fixed_prb106"
+description = """
+PRB 106 fixed-parameter analysis on the PRB 105 2x6 rectangle: noise-free L-BFGS-B optima
+(p = 1, 2: seeds 1-3; p = 3: seed 1) under local depolarising and bit-flip noise after the
+singlets and after every exchange layer. Exact density matrices and the PRB 106 trajectory
+estimator (1024 erroneous trajectories expected per point, 95 % bootstrap CIs), plus a
+hardware-like measured energy with 1024 shots per basis.
+"""
+runs = [
+  "results/*-graph_hva_opt_repr/runs/*-graph_hva_opt_repr-bm2x6-p[12]-noh0-sv-lbfgsb-s[123]",
+  "results/*-graph_hva_noise_reference/runs/*-graph_hva_noise_reference-bm2x6-p3-noh0-sv-lbfgsb-s*",
+]
+channels = ["depolarizing", "bit_flip"]
+probabilities = [1e-2, 1e-3, 1e-4, 1e-5]
+exact = true
+expected_error_trajectories = 1024
+min_trajectories = 1024
+shots = 1024
+bootstrap = 2000
+seed = 1

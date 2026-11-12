@@ -1,0 +1,19 @@
+# Compiled hardware noise for comparison (a separate mode, never mixed with paper-layer rows):
+# the seed-1 p = 2 noise-free optimum on FakeGuadalupeV2's noise model (gates, T1/T2, readout)
+# after generic SABRE routing. Paper-layer points at one p_e for reference. No IBM jobs.
+#
+#   uv run kagome-vqe noise-analysis configs/noise/graph_hva_noise_hardware_example.toml
+name = "graph_hva_noise_hardware_example"
+description = "Seed-1 p = 2 noise-free optimum: paper-layer noise at 1e-3 versus FakeGuadalupeV2."
+runs = ["results/*-graph_hva_opt_repr/runs/*-graph_hva_opt_repr-bm2x6-p2-noh0-sv-lbfgsb-s1"]
+channels = ["depolarizing"]
+probabilities = [1e-3]
+expected_error_trajectories = 256
+min_trajectories = 256
+bootstrap = 500
+seed = 3
+
+[[hardware]]
+label = "guadalupe"
+backend = { kind = "aer_noisy", name = "FakeGuadalupeV2", shots = 4096, final_shots = 4096 }
+repeats = 2

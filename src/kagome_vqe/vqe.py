@@ -8,11 +8,12 @@ compute the exact reference energy) and is what ``kagome-vqe run --dry-run`` rep
 
 from __future__ import annotations
 
+import itertools
 import logging
 import math
 import time
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 import numpy as np
@@ -321,12 +322,14 @@ class IdealPoint:
         nfev: Energy evaluations spent so far.
         shots: Circuit shots spent so far, over all measurement bases.
         ideal_energy: Statevector energy of the parameters, independent of noise and shots.
+        step_norm: Euclidean norm of the parameter change in this iteration (``nan`` at 0).
     """
 
     iteration: int
     nfev: int
     shots: int
     ideal_energy: float
+    step_norm: float = math.nan
 
 
 @dataclass(slots=True)
@@ -366,7 +369,9 @@ class VQERunResult:
         resources: Resource accounting: evaluations split into calibration, optimiser and
             re-measurement, shots, budget and timing (see :func:`run_vqe`).
         metadata: What was actually built: lattice bonds, boundary and dimers, ansatz
-            structure and parameter count, optimiser and gradient estimator, termination.
+            structure and parameter count, noise model and placement, optimiser and gradient
+            estimator, termination.
+        iterates: The optimiser's parameters after every iteration, ``iterates[0] = x0``.
     """
 
     config: RunConfig
@@ -392,6 +397,7 @@ class VQERunResult:
     ideal_fidelity: float | None = None
     resources: dict[str, Any] = field(default_factory=dict)
     metadata: dict[str, Any] = field(default_factory=dict)
+    iterates: list[FloatArray] = field(default_factory=list)
 
     @property
     def ideal_relative_error(self) -> float | None:
@@ -484,6 +490,8 @@ def compile_problem(
     resources in ``IsaProblem.mapping``.
     """
     mapping = cfg.mapping
+    if cfg.backend.logical_noise is not None:
+        return _logical_noise_problem(cfg, ansatz, hamiltonian)
     if mapping.strategy == "generic" and not isinstance(ansatz, GraphHVAnsatz):
         return compile_for_backend(
             circuit,
@@ -533,6 +541,32 @@ def compile_problem(
         initial_layout=cfg.backend.initial_layout,
         physical_layout=mapping.physical_layout if result.is_routed else None,
         seed_transpiler=cfg.seed,
+    )
+
+
+def _logical_noise_problem(
+    cfg: RunConfig, ansatz: Ansatz, hamiltonian: SparsePauliOp
+) -> IsaProblem:
+    """The logical circuit with PRB 106 layer noise: nothing is routed or transpiled."""
+    from kagome_vqe.noise import layer_noise_circuit
+
+    noise = cfg.backend.logical_noise
+    assert noise is not None
+    if not isinstance(ansatz, GraphHVAnsatz):  # guaranteed by RunConfig validation
+        msg = "logical noise needs the graph_hva ansatz"
+        raise TypeError(msg)
+    circuit = layer_noise_circuit(ansatz, noise.channel, noise.probability)
+    problem = compile_for_backend(circuit, hamiltonian, None)
+    # compile_for_backend(None) only decomposes composite gates; keep the gates as built.
+    problem = problem.with_circuit(circuit)
+    return replace(
+        problem,
+        mapping={
+            "requested": "logical",
+            "used": "logical",
+            "status": "not_routed",
+            "noise_placement": noise.placement,
+        },
     )
 
 
@@ -609,6 +643,7 @@ class _IdealTracker:
     def __init__(self, prep: Prepared) -> None:
         self._fn = _ideal_energy_fn(prep)
         self.trace: list[IdealPoint] = []
+        self.iterates: list[FloatArray] = []
         self.time_s = 0.0
 
     @property
@@ -624,9 +659,12 @@ class _IdealTracker:
         return value
 
     def record(self, nit: int, nfev: int, shots: int, theta: FloatArray) -> None:
+        theta = np.array(theta, dtype=float)
+        step = float(np.linalg.norm(theta - self.iterates[-1])) if self.iterates else math.nan
+        self.iterates.append(theta)
         value = self.energy(theta)
         if value is not None:
-            self.trace.append(IdealPoint(nit, nfev, shots, value))
+            self.trace.append(IdealPoint(nit, nfev, shots, value, step))
 
 
 def _minimise(
@@ -783,7 +821,10 @@ def run_vqe(
         ideal_trace=tracker.trace,
         ideal_fidelity=fidelity,
         resources=resources,
-        metadata=_run_metadata(prep, optimizer, opt, budget_exhausted=exhausted),
+        metadata=_run_metadata(
+            prep, optimizer, opt, budget_exhausted=exhausted, iterates=tracker.iterates
+        ),
+        iterates=tracker.iterates,
     )
     log.info(
         "%s finished: E_final=%.6f (exact %.6f, rel. err %.2e), %d evaluations in %.1fs",
@@ -797,8 +838,48 @@ def run_vqe(
     return result
 
 
+def _step_statistics(iterates: list[FloatArray], optimizer: Optimizer) -> dict[str, Any]:
+    """Size of the parameter updates: largest, median, and how many step control shortened."""
+    steps = np.array([np.linalg.norm(b - a) for a, b in itertools.pairwise(iterates)], dtype=float)
+    raw = getattr(optimizer, "raw_step_norms", None)
+    return {
+        "iterations": int(steps.size),
+        "max_step_norm": float(steps.max()) if steps.size else None,
+        "median_step_norm": float(np.median(steps)) if steps.size else None,
+        "first_step_norm": float(steps[0]) if steps.size else None,
+        "max_raw_step_norm": float(max(raw)) if raw else None,
+        "controlled_steps": getattr(optimizer, "controlled_steps", None),
+    }
+
+
+def _hyperparameters(cfg: RunConfig, optimizer: Optimizer) -> dict[str, Any]:
+    """The optimiser's settings in effect (SPSA reports its calibrated gains)."""
+    schedule = getattr(optimizer, "schedule", None)
+    if callable(schedule):
+        return dict(schedule())
+    o = cfg.optimizer
+    if o.type == "adam":
+        return {
+            "lr": o.lr,
+            "beta1": o.beta1,
+            "beta2": o.beta2,
+            "amsgrad": o.amsgrad,
+            "gradient": o.gradient,
+            "perturbation": o.perturbation if o.gradient == "spsa" else None,
+            "fd_eps": o.fd_eps if o.gradient in ("forward", "central") else None,
+        }
+    if o.type == "scipy":
+        return {"method": o.method, "tol": o.tol, "options": dict(o.options)}
+    return {"lr": o.lr, "gradient": o.gradient}
+
+
 def _run_metadata(
-    prep: Prepared, optimizer: Optimizer, opt: OptimizeResult, *, budget_exhausted: bool
+    prep: Prepared,
+    optimizer: Optimizer,
+    opt: OptimizeResult,
+    *,
+    budget_exhausted: bool,
+    iterates: list[FloatArray] | None = None,
 ) -> dict[str, Any]:
     """:func:`problem_metadata` plus the optimiser actually used and why it stopped."""
     cfg = prep.config
@@ -808,6 +889,8 @@ def _run_metadata(
         "implementation": repr(optimizer),
         "gradient": cfg.optimizer.gradient_description(),
         "calibrated_learning_rate": getattr(optimizer, "calibrated_learning_rate", None),
+        "hyperparameters": _hyperparameters(cfg, optimizer),
+        "steps": _step_statistics(iterates or [], optimizer),
     }
     metadata["termination"] = {
         "message": opt.message,
@@ -844,6 +927,7 @@ def _resources(
         "calibration_evaluations": calibration,
         "optimizer_evaluations": objective.nfev - calibration,
         "remeasurement_evaluations": 1,
+        "circuit_executions": (objective.nfev + 1) * groups * _scale_factors(cfg),
         "evaluations_per_iteration": optimizer.evaluations_per_iteration(
             prep.ansatz.num_parameters
         ),
@@ -857,6 +941,47 @@ def _resources(
         "budget_exhausted": budget_exhausted,
         **timing,
     }
+
+
+def _scale_factors(cfg: RunConfig) -> int:
+    """Circuits per measurement basis and energy (ZNE runs one per scale factor)."""
+    zne = cfg.mitigation.zne
+    return len(zne.scales) if zne is not None else 1
+
+
+def noise_metadata(prep: Prepared) -> dict[str, Any]:
+    """What noise the energies carry and where it acts (for result files)."""
+    backend = prep.config.backend
+    if backend.logical_noise is not None:
+        noise = backend.logical_noise
+        layers = prep.ansatz.noise_layers if isinstance(prep.ansatz, GraphHVAnsatz) else None
+        return {
+            "mode": "paper_layers",
+            "description": (
+                "PRB 106 Sec. II D: single-qubit channel on every qubit after the singlet "
+                "preparation and after every exchange-gate layer, on the logical circuit "
+                "(no routing, no native gates, no readout error)"
+            ),
+            **noise.model_dump(),
+            "noise_layers": layers,
+            "locations": prep.problem.gate_counts.get("pauli_channel", 0),
+            "error_free_probability": None
+            if layers is None
+            else float((1 - noise.probability) ** (layers * prep.ansatz.num_qubits)),
+        }
+    if backend.kind == "aer_noisy":
+        return {
+            "mode": "compiled_hardware",
+            "description": (
+                "Aer noise model of the fake backend on the transpiled circuit (native gates, "
+                "routing, readout)"
+            ),
+            "backend": backend.name,
+            "error_sources": backend.noise,
+        }
+    if backend.kind in ("fake", "ibm"):
+        return {"mode": "device", "backend": backend.name}
+    return {"mode": "none"}
 
 
 def initial_point(cfg: RunConfig, num_parameters: int) -> FloatArray:
@@ -903,6 +1028,7 @@ def problem_metadata(prep: Prepared) -> dict[str, Any]:
             "circuit_parameters": prep.parameter_map.num_occurrences,
             **graph_details,
         },
+        "noise": noise_metadata(prep),
         "seed": prep.config.seed,
         "x0_scale": prep.config.x0_scale,
     }

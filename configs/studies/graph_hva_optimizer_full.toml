@@ -14,7 +14,7 @@
 # complete optimiser comparisons for the seeds it finished.
 name = "graph_hva_opt_full"
 description = """
-Full comparison on the PRB 105 2x6 rectangle (open, 12 sites, 20 bonds), graph_hva with one
+Full comparison on the PRB 105 2x6 rectangle (open, 12 sites, 16 bonds), graph_hva with one
 parameter per gate, p = 1, 2, 3, with and without H0, seeds 1-5; the 12-site star (p = 1)
 as a regression control. Experiment A: exact statevector, 10000 evaluations per run.
 Experiment B: aer_ideal with 1024 shots per basis (sampling noise only, no gate or readout

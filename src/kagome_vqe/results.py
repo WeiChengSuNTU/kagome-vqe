@@ -7,6 +7,7 @@ A results directory ``results/<UTC timestamp>-<name>/`` contains::
     trace.csv          one row per energy evaluation
     params.npy         parameters of every evaluation (optional, shape (nfev, n))
     ideal_trace.csv    noise-free energy after every iteration vs shots spent (optional)
+    iterates.npy       the optimiser's parameters after every iteration, row 0 = x0 (optional)
     environment.json   package versions, Python, platform, git commit
     run.log            the log of the run (attached by the CLI)
     status.json        "running", "completed" or "failed" (+ error); written by run_and_save
@@ -24,7 +25,10 @@ clash. Directories written before ``status.json`` existed load as completed.
 (evaluations split into calibration / optimiser / re-measurement, shots, budget, timing)
 and ``metadata`` (the built lattice with every bond, boundary, dimers; ansatz structure;
 optimiser and the gradient estimator actually used; termination reason). Readers treat all
-of these as optional, so schema-1 directories keep loading.
+of these as optional, so schema-1 directories keep loading. Later additions within schema 2
+(``iterates.npy``, ``step_norm`` in ``ideal_trace.csv``, ``metadata.noise``,
+``metadata.optimizer.hyperparameters`` / ``steps``, ``resources.circuit_executions``) are
+likewise optional for readers.
 """
 
 from __future__ import annotations
@@ -177,6 +181,8 @@ def save_run(result: VQERunResult, run_dir: Path) -> Path:
         pd.DataFrame([asdict(p) for p in result.ideal_trace]).to_csv(
             run_dir / "ideal_trace.csv", index=False
         )
+    if result.iterates and result.config.record_params:
+        np.save(run_dir / "iterates.npy", np.vstack(result.iterates))
     if not (run_dir / "environment.json").exists():  # start_run wrote it at the start
         _write_json(run_dir / "environment.json", environment_info())
     partial = run_dir / "partial_trace.csv"
@@ -363,6 +369,7 @@ class LoadedRun:
     trace: pd.DataFrame
     params: np.ndarray | None
     ideal_trace: pd.DataFrame | None = None
+    iterates: np.ndarray | None = None
 
     @property
     def name(self) -> str:
@@ -447,8 +454,15 @@ def load_run(run_dir: Path) -> LoadedRun:
     params = np.load(params_path) if params_path.exists() else None
     ideal_path = run_dir / "ideal_trace.csv"
     ideal = pd.read_csv(ideal_path) if ideal_path.exists() else None
+    iterates_path = run_dir / "iterates.npy"
     return LoadedRun(
-        path=run_dir, config=config, result=result, trace=trace, params=params, ideal_trace=ideal
+        path=run_dir,
+        config=config,
+        result=result,
+        trace=trace,
+        params=params,
+        ideal_trace=ideal,
+        iterates=np.load(iterates_path) if iterates_path.exists() else None,
     )
 
 

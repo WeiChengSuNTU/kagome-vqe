@@ -1,0 +1,31 @@
+# Transfer versus re-optimisation under noise (docs/experiments/graph_hva_noisy_optimizers.md):
+# the final parameters of the representative noisy-optimiser study, evaluated exactly (density
+# matrix) under paper-layer noise. Runs optimised on the noise-free statevector are evaluated at
+# every noise model (transfer); so are runs optimised with sampling noise only (`shots1024`, same
+# shot budget as the noisy runs: the cleanest control). Runs optimised under paper-layer noise
+# are evaluated only at their own
+# (match_source_noise). Sources: configs/studies/graph_hva_noise_opt_representative.toml.
+#
+#   uv run kagome-vqe noise-analysis configs/noise/graph_hva_noise_transfer.toml
+name = "graph_hva_noise_transfer"
+description = """
+Exact noisy energy and fidelity of the representative study's final parameters: noise-free
+optima transferred to depolarising p_e = 3e-4, 1e-3 and bit flip p_e = 1e-3, versus parameters
+optimised under that same noise.
+"""
+runs = [
+  "results/*-graph_hva_noise_repr/runs/*-sv-*",
+  "results/*-graph_hva_noise_repr/runs/*-shots1024-*",
+  "results/*-graph_hva_noise_repr/runs/*-dep0.0003-*",
+  "results/*-graph_hva_noise_repr/runs/*-dep0.001-*",
+  "results/*-graph_hva_noise_repr/runs/*-bf0.001-*",
+]
+channels = ["depolarizing", "bit_flip"]
+probabilities = [3e-4, 1e-3]
+match_source_noise = true
+exact = true
+expected_error_trajectories = 256
+min_trajectories = 256
+shots = 0
+bootstrap = 500
+seed = 2

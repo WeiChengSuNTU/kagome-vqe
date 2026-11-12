@@ -44,6 +44,7 @@ __all__ = [
     "AerEnergy",
     "EnergyBatch",
     "EnergyEstimator",
+    "LogicalNoiseEnergy",
     "RuntimeEnergy",
     "RuntimeSession",
     "StatevectorEnergy",
@@ -351,6 +352,130 @@ class AerEnergy(_PrimitiveEnergy):
         return self._run_pub(self._primitive, params, shots or self._configured_shots)
 
 
+class LogicalNoiseEnergy:
+    """Shot-sampled energies of a circuit carrying PRB 106 layer noise (``logical_noise``).
+
+    The problem's circuit holds :class:`~kagome_vqe.noise.PauliChannel` instructions at the
+    noise locations (see :func:`kagome_vqe.noise.layer_noise_circuit`). Each energy measures
+    the observable's qubit-wise commuting groups (three for the Heisenberg model) with ``shots``
+    shots each; every shot is an independent noise trajectory followed by one projective
+    measurement, so sampling noise and gate noise are both present as on hardware.
+
+    Engines: ``"trajectories"`` (:class:`~kagome_vqe.noise.PauliTrajectorySimulator`, only
+    erroneous shots are simulated) or ``"aer"`` (the same circuit with Aer quantum errors,
+    sampled by Aer through :class:`AerEnergy`).
+
+    The reported ``std`` is the standard error of the estimate, ``sqrt(sum_g var_g / shots)``
+    from the sampled outcomes (not the primitive's upper bound used by :class:`AerEnergy`).
+    """
+
+    def __init__(
+        self,
+        problem: IsaProblem,
+        *,
+        shots: int,
+        engine: Literal["trajectories", "aer"] = "trajectories",
+        seed: int | None = None,
+        aer_method: AerMethod = "auto",
+        noise: dict[str, Any] | None = None,
+    ) -> None:
+        """Create the estimator."""
+        from kagome_vqe.noise import (
+            PauliTrajectorySimulator,
+            aer_circuit,
+            measurement_bases,
+            noise_locations,
+        )
+
+        if shots < 1:
+            msg = f"shots must be >= 1, got {shots}"
+            raise ValueError(msg)
+        self._problem = problem
+        self._shots = shots
+        self._engine = engine
+        self._seeds = np.random.default_rng(seed)
+        self._aer: AerEnergy | None = None
+        self._simulator: PauliTrajectorySimulator | None = None
+        if engine == "aer":
+            method: AerMethod = aer_method
+            if method == "auto":
+                method = (
+                    "density_matrix"
+                    if problem.circuit.num_qubits <= DENSITY_MATRIX_MAX_QUBITS
+                    else "statevector"
+                )
+            self._aer = AerEnergy(
+                problem.with_circuit(aer_circuit(problem.circuit)),
+                shots=shots,
+                seed=seed,
+                method=method,
+            )
+        else:
+            self._simulator = PauliTrajectorySimulator(problem.circuit)
+            self._bases = measurement_bases(problem.observable)
+        self._description = {
+            "kind": "logical_noise",
+            "engine": engine,
+            "noise": noise,
+            "noise_locations": noise_locations(problem.circuit),
+            "shots": shots,
+            "seed": seed,
+            "std": "standard error from sampled outcomes"
+            if engine == "trajectories"
+            else "primitive upper bound sum|c_i|sigma_i/sqrt(shots)",
+        }
+
+    @property
+    def description(self) -> dict[str, Any]:
+        """Backend and options."""
+        if self._aer is not None:
+            return {**self._description, "aer": self._aer.description}
+        return dict(self._description)
+
+    def evaluate(self, params: FloatArray, *, shots: int | None = None) -> EnergyBatch:
+        """Sampled energies, every row with fresh noise and measurement randomness."""
+        n_shots = shots or self._shots
+        if self._aer is not None:
+            return self._aer.evaluate(params, shots=n_shots)
+        assert self._simulator is not None
+        rows = _as_2d(params)
+        start = time.perf_counter()
+        rng = np.random.default_rng(int(self._seeds.integers(0, 2**31 - 1)))
+        energies = np.empty(rows.shape[0])
+        stds = np.empty(rows.shape[0])
+        letters = [basis for basis, _ in self._bases]
+        for i, theta in enumerate(rows):
+            histograms = self._simulator.sample_measurements(theta, letters, n_shots, rng)
+            mean = 0.0
+            variance = 0.0
+            for counts, (_, diagonal) in zip(histograms, self._bases, strict=True):
+                first = float(counts @ diagonal) / n_shots
+                second = float(counts @ diagonal**2) / n_shots
+                mean += first
+                variance += max(second - first**2, 0.0) / n_shots
+            energies[i] = mean
+            stds[i] = math.sqrt(variance)
+        return EnergyBatch(
+            energies=energies,
+            stds=stds,
+            shots=n_shots,
+            job_id=None,
+            wall_time_s=time.perf_counter() - start,
+        )
+
+    def __enter__(self) -> Self:
+        """No resources to acquire."""
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: TracebackType | None,
+    ) -> None:
+        """No resources to release."""
+
+
 class RuntimeSession:
     """Lifecycle, seeding and retries for one qiskit-ibm-runtime primitive.
 
@@ -606,6 +731,16 @@ def _base_estimator(
     assert cfg.shots is not None  # guaranteed by BackendConfig validation
     if cfg.kind == "aer_ideal":
         return AerEnergy(problem, shots=cfg.shots, seed=seed, method=cfg.aer_method)
+    if cfg.kind == "logical_noise":
+        assert cfg.logical_noise is not None  # guaranteed by BackendConfig validation
+        return LogicalNoiseEnergy(
+            problem,
+            shots=cfg.shots,
+            engine=cfg.logical_noise.engine,
+            seed=seed,
+            aer_method=cfg.aer_method,
+            noise=cfg.logical_noise.model_dump(),
+        )
     if cfg.kind == "aer_noisy":
         return AerEnergy(
             problem,

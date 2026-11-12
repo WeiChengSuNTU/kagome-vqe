@@ -6,7 +6,10 @@ paper-inspired hardware mappings. Everything here is additive: the ring ansatzes
 
 Experiments with these tools are written up separately: the L-BFGS-B depth sweep in
 [`experiments/graph_hva_baseline.md`](experiments/graph_hva_baseline.md), the optimiser
-comparison in [`experiments/graph_hva_optimizers.md`](experiments/graph_hva_optimizers.md)
+comparison in [`experiments/graph_hva_optimizers.md`](experiments/graph_hva_optimizers.md),
+PRB 106 noise models and the fixed-parameter noise analysis in
+[`experiments/graph_hva_noise.md`](experiments/graph_hva_noise.md), noisy optimisation in
+[`experiments/graph_hva_noisy_optimizers.md`](experiments/graph_hva_noisy_optimizers.md)
 and the compile-only mapping benchmarks in [`hardware.md`](hardware.md).
 
 References (PDFs in `references/KagomeHVA/`):

@@ -484,6 +484,13 @@ def study(
         Path | None,
         typer.Option(help="Parent of the new study directory (default: output_dir in CONFIG)."),
     ] = None,
+    summary: Annotated[
+        bool,
+        typer.Option(
+            "--summary/--no-summary",
+            help="Write summary/ at the end (skip it when several processes share a study).",
+        ),
+    ] = True,
     verbose: Verbose = False,
 ) -> None:
     """Run a multi-seed experiment matrix (lattice x p x H0 x backend x optimiser x seed).
@@ -517,6 +524,7 @@ def study(
         only=only,
         max_runs=max_runs,
         time_limit_s=None if time_limit is None else 60 * time_limit,
+        summarise=summary,
     )
     console.print(f"study directory: {study_dir}")
     console.print(f"report: {study_dir / 'summary' / 'report.md'}")
@@ -533,6 +541,67 @@ def study_summary(
 
     configure_logging(logging.INFO)
     console.print(f"wrote {summarise_study(study_dir)}")
+
+
+# -- fixed-parameter noise analysis -----------------------------------------------------------
+
+
+@app.command(name="noise-analysis")
+def noise_analysis(
+    config: Annotated[Path, typer.Argument(help="Noise-analysis TOML (configs/noise/).")],
+    output_dir: Annotated[Path, typer.Option(help="Parent of the new analysis directory.")] = Path(
+        "results"
+    ),
+    dry_run: Annotated[
+        bool, typer.Option("--dry-run", help="List the matched runs and trajectory counts only.")
+    ] = False,
+) -> None:
+    """Evaluate saved optimal parameters under PRB 106 layer noise (no re-optimisation).
+
+    For each matched run and each (channel, p_e): noise-free and noisy energy and ground-space
+    fidelity (exact density matrix up to 12 qubits; PRB 106 trajectory estimator with 95 %
+    bootstrap CIs) and the Eq. 9 estimate. Writes a new results/<timestamp>-<name>/.
+    """
+    from kagome_vqe.noise_analysis import (
+        load_noise_analysis_config,
+        resolve_sources,
+        run_noise_analysis,
+        trajectories_for,
+    )
+    from kagome_vqe.results import load_run
+
+    configure_logging(logging.INFO)
+    cfg = load_noise_analysis_config(config)
+    if dry_run:
+        table = Table("run", "p", "n d", *(f"N(p_e={p:g})" for p in cfg.probabilities))
+        for source in resolve_sources(cfg):
+            run = load_run(source)
+            ansatz = run.config.ansatz.build(run.config.lattice.build())
+            locations = ansatz.num_qubits * getattr(ansatz, "noise_layers", 0)
+            table.add_row(
+                run.name,
+                str(run.config.ansatz.reps),
+                str(locations),
+                *(str(trajectories_for(cfg, p, locations)) for p in cfg.probabilities),
+            )
+        console.print(table)
+        return
+    out = run_noise_analysis(cfg, output_root=output_dir)
+    console.print(f"analysis directory: {out}")
+    console.print(f"report: {out / 'report.md'}")
+
+
+@app.command(name="noise-summary")
+def noise_summary(
+    analysis_dir: Annotated[
+        Path, typer.Argument(help="A noise-analysis directory.", exists=True, file_okay=False)
+    ],
+) -> None:
+    """Regenerate a noise analysis's report and figures from its saved points."""
+    from kagome_vqe.noise_analysis import summarise_noise_analysis
+
+    configure_logging(logging.INFO)
+    console.print(f"wrote {summarise_noise_analysis(analysis_dir)}")
 
 
 # -- plot -------------------------------------------------------------------------------------

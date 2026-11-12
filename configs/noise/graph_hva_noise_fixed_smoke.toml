@@ -1,0 +1,18 @@
+# Fixed-parameter noise smoke test (PRB 106 methodology, Secs. II E / III B).
+# Noise-free L-BFGS-B optimum of seed 1, p = 1 and p = 2, on the PRB 105 2x6 rectangle,
+# from the limited optimiser comparison (docs/experiments/graph_hva_optimizers.md). Run
+# directories are local (results/ is not in git); point `runs` at your own copies.
+#
+#   uv run kagome-vqe noise-analysis configs/noise/graph_hva_noise_fixed_smoke.toml --dry-run
+#   uv run kagome-vqe noise-analysis configs/noise/graph_hva_noise_fixed_smoke.toml
+name = "graph_hva_noise_fixed_smoke"
+description = "Seed-1 noise-free L-BFGS-B optima (p = 1, 2) under paper-layer noise; smoke test."
+runs = ["results/*-graph_hva_opt_repr/runs/*-graph_hva_opt_repr-bm2x6-p[12]-noh0-sv-lbfgsb-s1"]
+channels = ["depolarizing", "bit_flip"]
+probabilities = [1e-2, 1e-3]
+exact = true
+expected_error_trajectories = 256
+min_trajectories = 256
+shots = 1024
+bootstrap = 500
+seed = 1

@@ -534,6 +534,15 @@ def _relative(exact: float, energy: float | None) -> float:
     return abs(energy - exact) / abs(exact)
 
 
+def _peak_ideal_error(run: Any, exact: float) -> tuple[float, float]:
+    """Largest noise-free relative error along the run, and the error at the start."""
+    trace = run.ideal_trace
+    if trace is None or trace.empty:
+        return math.nan, math.nan
+    errors = (trace["ideal_energy"].astype(float) - exact).abs() / abs(exact)
+    return float(errors.max()), float(errors.iloc[0])
+
+
 def _run_row(labels: dict[str, Any], run: Any, threshold: float) -> dict[str, Any]:
     res = run.result
     resources = run.resources
@@ -542,6 +551,8 @@ def _run_row(labels: dict[str, Any], run: Any, threshold: float) -> dict[str, An
     if ideal is None and run.config.backend.is_exact:
         ideal = res["final_energy"]
     ideal_err = _relative(exact, ideal)
+    peak, start = _peak_ideal_error(run, exact)
+    steps = run.metadata.get("optimizer", {}).get("steps", {})
     return {
         **{k: labels[k] for k in ("lattice", "reps", "include_h0", "backend", "optimizer")},
         "seed": int(res.get("seed", labels["seed"])),
@@ -553,8 +564,15 @@ def _run_row(labels: dict[str, Any], run: Any, threshold: float) -> dict[str, An
         "ideal_energy": ideal,
         "ideal_relative_error": ideal_err,
         "fidelity": res.get("ideal_fidelity"),
+        "noise": run.metadata.get("noise", {}).get("mode", "none"),
+        "measured_minus_ideal": res["final_energy"] - ideal if ideal is not None else math.nan,
+        "initial_relative_error": start,
+        "peak_relative_error": peak,
+        "max_step_norm": steps.get("max_step_norm"),
+        "controlled_steps": steps.get("controlled_steps"),
         "evaluations": res["nfev"],
         "calibration_evaluations": resources.get("calibration_evaluations", 0),
+        "circuit_executions": resources.get("circuit_executions"),
         "iterations": res["nit"],
         "total_shots": res.get("total_shots", 0),
         "optimiser_wall_time_s": resources.get("optimiser_wall_time_s", res["wall_time_s"]),
@@ -599,6 +617,11 @@ def _group_stats(frame: pd.DataFrame) -> pd.DataFrame:
                 "mean_ideal_energy": energy.mean(),
                 "std_ideal_energy": energy.std(ddof=1) if len(group) > 1 else 0.0,
                 "median_relative_error": err.median(),
+                "median_final_relative_error": group["final_relative_error"].astype(float).median(),
+                "median_peak_relative_error": pd.to_numeric(
+                    group["peak_relative_error"], errors="coerce"
+                ).median(),
+                "max_step_norm": pd.to_numeric(group["max_step_norm"], errors="coerce").max(),
                 "best_relative_error": err.min(),
                 "worst_relative_error": err.max(),
                 "mean_fidelity": fidelity.mean(),
@@ -689,6 +712,28 @@ def _markdown_report(
             f" | {_fmt(g['mean_fidelity'], '.4f')} | {_fmt(g['mean_evaluations'], '.0f')} | "
             f"{_fmt(g['mean_total_shots'], ',.0f')} | {_fmt(g['mean_optimiser_time_s'], '.1f')} | "
             f"{g['successes']}/{g['seeds']} | {g['budget_stops']} |"
+        )
+    lines += [
+        "",
+        "## Measured versus noise-free quality",
+        "",
+        "`measured` is the relative error of the final energy as the backend reports it "
+        "(re-measured with `final_shots`, so it includes shot noise and, on noisy backends, "
+        "the noise bias); `noise-free` is the statevector error of the same parameters. "
+        "`peak` is the largest noise-free error of any iterate (early excursions); "
+        "`max step` the largest parameter update.",
+        "",
+        "| lattice | p | H0 | backend | optimizer | median measured rel. err "
+        "| median noise-free rel. err | median peak rel. err | max step |",
+        "|---|---|---|---|---|---|---|---|---|",
+    ]
+    for g in groups.to_dict("records"):
+        lines.append(
+            f"| {g['lattice']} | {g['reps']} | {'yes' if g['include_h0'] else 'no'} | "
+            f"{g['backend']} | {g['optimizer']} | "
+            f"{_fmt(g['median_final_relative_error'], '.2e')} | "
+            f"{_fmt(g['median_relative_error'], '.2e')} | "
+            f"{_fmt(g['median_peak_relative_error'], '.2e')} | {_fmt(g['max_step_norm'], '.3f')} |"
         )
     lines += [
         "",

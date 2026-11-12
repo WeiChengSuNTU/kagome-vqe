@@ -1,0 +1,49 @@
+# Smoke test of noisy optimisation (about 2 minutes): one seed, p = 1, small budget, the
+# paper-layer depolarising and bit-flip channels at a strong p_e = 1e-2 so that noise is
+# clearly visible. Verifies noise injection, budgets, persistence and both optimisers.
+#
+#   uv run kagome-vqe study configs/studies/graph_hva_noise_opt_smoke.toml
+name = "graph_hva_noise_smoke"
+description = """
+Smoke test: PRB 105 2x6 rectangle, graph_hva p = 1 without H0 (16 parameters), seed 1.
+Paper-layer (PRB 106) depolarising and bit-flip noise, p_e = 1e-2 (n d = 72 locations),
+256 shots per basis, 153,600 shots per run (200 energies); noise-free statevector reference.
+"""
+seeds = [1]
+x0_scale = 0.1
+reps = [1]
+include_h0 = [false]
+success_threshold = 0.01
+
+[ansatz]
+type = "graph_hva"
+
+[[lattices]]
+label = "bm2x6"
+lattice = { kind = "kagome_bm_rectangle", rows = 2, cols = 6 }
+schedule = "prb105"
+
+[[backends]]
+label = "sv"
+backend = { kind = "statevector" }
+budget = { max_evaluations = 200 }
+
+[[backends]]
+label = "dep0.01"
+backend = { kind = "logical_noise", shots = 256, final_shots = 4096, logical_noise = { channel = "depolarizing", probability = 1e-2 } }
+budget = { max_shots = 153600 }
+
+[[backends]]
+label = "bf0.01"
+backend = { kind = "logical_noise", shots = 256, final_shots = 4096, logical_noise = { channel = "bit_flip", probability = 1e-2 } }
+budget = { max_shots = 153600 }
+
+[[optimizers]]
+label = "spsa_cal"
+fit_maxiter_to_budget = true
+optimizer = { type = "spsa", calibrate = true, perturbation = 0.1, calibration_samples = 10, target_magnitude = 0.2 }
+
+[[optimizers]]
+label = "adam_spsa"
+fit_maxiter_to_budget = true
+optimizer = { type = "adam", gradient = "spsa", lr = 0.02, perturbation = 0.1 }

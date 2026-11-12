@@ -120,12 +120,12 @@ def ibm_service(settings: Settings | None = None) -> object:
 def resolve_backend(cfg: BackendConfig, settings: Settings | None = None) -> BackendV2 | None:
     """Return the backend object a config refers to, or ``None`` for statevector.
 
-    * ``statevector`` -> ``None`` (evaluated on the logical circuit).
+    * ``statevector`` / ``logical_noise`` -> ``None`` (evaluated on the logical circuit).
     * ``aer_ideal`` -> an ideal ``AerSimulator`` (used as a transpilation target).
     * ``aer_noisy`` / ``fake`` -> the fake backend ``cfg.name``.
     * ``ibm`` -> the real device ``cfg.name`` from the runtime service.
     """
-    if cfg.kind == "statevector":
+    if cfg.kind in ("statevector", "logical_noise"):
         return None
     if cfg.kind == "aer_ideal":
         from qiskit_aer import AerSimulator

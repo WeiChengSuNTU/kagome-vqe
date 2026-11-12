@@ -43,6 +43,12 @@ class Spsa:
         stability_constant: ``A`` in the schedule; ``None`` means ``0.1 * maxiter``.
         calibration_samples: Gradient probes used by calibration (each costs 2 evaluations).
         target_magnitude: Desired first-step size for calibration (``2 pi / 10`` as in Qiskit).
+        max_step_norm: Optional step control: an update ``a_k g_k`` longer than this (Euclidean
+            norm) is rescaled to this length. ``None`` (default): no control, the classic
+            algorithm.
+        clip_update: Optional step control: each update component is clipped to
+            ``[-clip_update, clip_update]`` (applied before ``max_step_norm``). ``None``
+            (default): no clipping.
         seed: Seed for the random perturbation directions. Pass a
             ``numpy.random.Generator`` to share a stream with the caller.
     """
@@ -59,6 +65,8 @@ class Spsa:
         stability_constant: float | None = None,
         calibration_samples: int = 25,
         target_magnitude: float = 2 * np.pi / 10,
+        max_step_norm: float | None = None,
+        clip_update: float | None = None,
         seed: int | np.random.Generator | None = None,
     ) -> None:
         """See class docstring."""
@@ -77,7 +85,19 @@ class Spsa:
         self._A = 0.1 * maxiter if stability_constant is None else stability_constant
         self._cal_samples = calibration_samples
         self._target = target_magnitude
+        for value, what in ((max_step_norm, "max_step_norm"), (clip_update, "clip_update")):
+            if value is not None and value <= 0:
+                msg = f"{what} must be positive"
+                raise ValueError(msg)
+        self._max_step_norm = max_step_norm
+        self._clip = clip_update
         self._rng = seed if isinstance(seed, np.random.Generator) else np.random.default_rng(seed)
+        self.step_norms: list[float] = []
+        """Euclidean norm of every parameter update actually applied in the last run."""
+        self.raw_step_norms: list[float] = []
+        """Norm of every update before step control (equal to :attr:`step_norms` without it)."""
+        self.controlled_steps = 0
+        """Updates that step control shortened in the last run."""
         self.calibration_evaluations = 0
         """Evaluations the last :meth:`minimize` spent on calibration (0 without it)."""
         self.calibrated_learning_rate: float | None = None
@@ -106,6 +126,40 @@ class Spsa:
     def calibration_cost(self) -> int:
         """Evaluations calibration will spend (``2 * calibration_samples``, or 0)."""
         return 2 * self._cal_samples if self._calibrate else 0
+
+    def schedule(self) -> dict[str, float | int | bool | None]:
+        """Gains and step control actually used (after calibration, if it ran)."""
+        return {
+            "calibrate": self._calibrate,
+            "learning_rate": self.calibrated_learning_rate
+            if self.calibrated_learning_rate is not None
+            else self._a,
+            "perturbation": self._c,
+            "alpha": self._alpha if self._calibrate else None,
+            "gamma": self._gamma if self._calibrate else None,
+            "stability_constant": self._A if self._calibrate else None,
+            "target_magnitude": self._target if self._calibrate else None,
+            "calibration_samples": self._cal_samples if self._calibrate else 0,
+            "max_step_norm": self._max_step_norm,
+            "clip_update": self._clip,
+        }
+
+    def _control(self, step: FloatArray) -> FloatArray:
+        """Apply the optional step control to an update ``a_k g_k``."""
+        raw = float(np.linalg.norm(step))
+        controlled = step
+        if self._clip is not None:
+            controlled = np.clip(controlled, -self._clip, self._clip)
+        if self._max_step_norm is not None:
+            norm = float(np.linalg.norm(controlled))
+            if norm > self._max_step_norm:
+                controlled = controlled * (self._max_step_norm / norm)
+        applied = float(np.linalg.norm(controlled))
+        self.raw_step_norms.append(raw)
+        self.step_norms.append(applied)
+        if applied < raw * (1 - 1e-12):
+            self.controlled_steps += 1
+        return controlled
 
     def _direction(self, n: int) -> FloatArray:
         """A random ``+-1`` vector (Bernoulli, the standard SPSA choice)."""
@@ -150,6 +204,7 @@ class Spsa:
         a = self._a
         self.calibration_evaluations = 0
         self.calibrated_learning_rate = None
+        self.step_norms, self.raw_step_norms, self.controlled_steps = [], [], 0
         if self._calibrate:
             a, used = self._calibrated_a(fn, x)
             nfev += used
@@ -164,7 +219,7 @@ class Spsa:
                 a_k, c_k = a, self._c
             grad, f_plus, f_minus, _ = self._probe(fn, x, c_k)
             nfev += 2
-            x = x - a_k * grad
+            x = x - self._control(a_k * grad)
             estimate = 0.5 * (f_plus + f_minus)
             history.append(estimate)
             if callback is not None:
@@ -185,5 +240,8 @@ class Spsa:
         """Debug representation."""
         return (
             f"Spsa(maxiter={self._maxiter}, learning_rate={self._a}, perturbation={self._c}, "
-            f"calibrate={self._calibrate})"
+            f"calibrate={self._calibrate}"
+            + (f", max_step_norm={self._max_step_norm}" if self._max_step_norm is not None else "")
+            + (f", clip_update={self._clip}" if self._clip is not None else "")
+            + ")"
         )

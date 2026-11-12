@@ -21,7 +21,7 @@ normalisation, `= 4 sum S.S`) on:
 | lattice (`[lattice] kind`) | description |
 |---|---|
 | `kagome_unit_cell` (default) | the open 12-site kagome star (18 bonds; exact ground energy -18, a dimer product) |
-| `kagome_bm_rectangle` | `rows x cols` open rectangles of Bosse & Montanaro (PRB 105), e.g. 2x6: 12 sites, 20 bonds |
+| `kagome_bm_rectangle` | `rows x cols` open rectangles of Bosse & Montanaro (PRB 105), e.g. 2x6: 12 sites, 16 bonds |
 | `kagome_kvqe20` | the 20-site open patch of Kattemolle & van Wezel (PRB 106) |
 | `kagome_patch` | the kagome sites of a `rows x cols` window of triangular-lattice coordinates, optionally with sites dropped |
 | `kagome_periodic` | `rows x cols` tori (periodic boundaries), e.g. 2x2 cells: 12 sites, 24 bonds |
@@ -93,7 +93,8 @@ are in [`docs/architecture.md`](docs/architecture.md).
 |---|---|---|
 | `statevector` | exact expectation values of the logical circuit, no shots | reference numbers, fast iteration, tests |
 | `aer_ideal` | Aer simulation that samples measurement shots, without noise | checking shot-noise sensitivity of an optimiser |
-| `aer_noisy` | as `aer_ideal`, plus the gate, decoherence and readout noise of the fake backend `name` | the "FakeXXX simulator" benchmark; fast enough for full runs |
+| `aer_noisy` | as `aer_ideal`, plus the gate, decoherence and readout noise of the fake backend `name`, acting on the *compiled* circuit (native gates, routing, readout) | the "FakeXXX simulator" benchmark: compiled hardware noise |
+| `logical_noise` | PRB 106 "paper-layer" noise: a depolarising or bit-flip channel (`[backend.logical_noise]`) on every qubit after the singlet preparation and after every exchange layer of the *logical* `graph_hva` circuit; no routing, native gates or readout error; shot-sampled | the physical noise model of PRB 106, noisy optimisation of `graph_hva` |
 | `fake` | the fake backend `name` driven through qiskit-ibm-runtime's local testing mode | rehearsing a hardware run with the exact code path (sessions, options) |
 | `ibm` | a real IBM Quantum device `name` via the cloud | production runs |
 
@@ -229,6 +230,8 @@ commands, interpretation, limitations):
 | [`docs/experiments/legacy_m0_m1_m2.md`](docs/experiments/legacy_m0_m1_m2.md) | 12-site star, legacy ring ansatzes: exact and noisy FakeGuadalupeV2 benchmarks (M0), gradient comparison (M1), error mitigation (M2) | completed |
 | [`docs/experiments/graph_hva_baseline.md`](docs/experiments/graph_hva_baseline.md) | `graph_hva` with L-BFGS-B on the star, the PRB 105 2x6 rectangle and the 12-site torus, `p = 1-4`, with and without H0 | completed (2 seeds) |
 | [`docs/experiments/graph_hva_optimizers.md`](docs/experiments/graph_hva_optimizers.md) | L-BFGS-B vs calibrated SPSA vs ADAM + SPSA gradient for `graph_hva`, noiseless and finite-shot, equal budgets | smoke and limited comparison completed; full profile configured, not yet run |
+| [`docs/experiments/graph_hva_noise.md`](docs/experiments/graph_hva_noise.md) | PRB 106 noise models and the fixed-parameter noise analysis (noise-free optima under local depolarising / bit-flip noise, Eq. 9 check), compiled-hardware noise kept separate | reproduction of the PRB 106 methodology on the 2x6 rectangle completed |
+| [`docs/experiments/graph_hva_noisy_optimizers.md`](docs/experiments/graph_hva_noisy_optimizers.md) | calibrated SPSA (with and without step control) vs ADAM + SPSA gradient under paper-layer noise, equal shot budgets, noise-free parameter quality, transfer of noise-free optima | new (not in PRB 106); smoke, pilot and limited comparison completed; full profile configured, not yet run |
 | [`docs/hardware.md`](docs/hardware.md) | compile-only mapping benchmarks on IBM Nighthawk and Heron | completed |
 | [`docs/roadmap.md`](docs/roadmap.md) | diagnosis of the noisy-energy gap and the milestone plan | living |
 
@@ -246,9 +249,11 @@ cancelling.
   reported unsupported for them.
 * `graph_hva` on the periodic 12-site torus does not reach the ground state at `p <= 4` within
   the evaluation limits used so far.
-* Optimiser conclusions for `graph_hva` so far rest on a limited 12-site comparison; the full
-  multi-seed study is configured but not run. Physical noise has not yet been studied for
-  `graph_hva`.
+* Optimiser conclusions for `graph_hva` so far rest on limited 12-site comparisons (three
+  seeds); the full multi-seed studies, noise-free and noisy, are configured but not run.
+* Physical noise for `graph_hva` is the PRB 106 logical-layer model (`logical_noise`) or a fake
+  backend's model on the compiled circuit (`aer_noisy`); no error mitigation has been applied
+  to `graph_hva` yet, and nothing has run on IBM hardware.
 
 ## Physics notes
 
