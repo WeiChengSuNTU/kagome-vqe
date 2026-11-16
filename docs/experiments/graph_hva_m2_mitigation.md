@@ -87,8 +87,10 @@ increase it, and readout correction slightly (a `1/(1 - 2q)^2` weight on two-bod
 optimisation studies found that shot noise, not bias, limits gradient descent at `p_e = 1e-3`
 ([`graph_hva_mitigation.md`](graph_hva_mitigation.md), Sec. 3) and that PIDN fails because it
 memorises shot noise in its training gradients
-([`graph_hva_pidn.md`](graph_hva_pidn.md), branch `feature/graph-hva-pidn`). Whether an M2 stack
-changes that is tested on the branch `feature/graph-hva-pidn-m2`.
+([`graph_hva_pidn.md`](graph_hva_pidn.md)). Whether an M2 stack changes that is tested in
+[`graph_hva_pidn_m2.md`](graph_hva_pidn_m2.md): it does not (mitigation removes bias, PIDN is
+limited by variance and by the noisy Stage I path), and gradient descent with readout + symmetry
+optimises exactly as well as unmitigated gradient descent while reporting the right energy.
 
 ## 5. Reproduction
 

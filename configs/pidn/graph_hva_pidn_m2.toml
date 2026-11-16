@@ -1,0 +1,41 @@
+# PIDN closed loop with Stage I data from M2-style pipelines (relabelled targets, see
+# graph_hva_pidn_m2_relabel.toml). Stage III runs on the pipeline's noise model (depolarising
+# p_e = 1e-3 + readout error 0.02); the paper-style network, the small network, an M2-anchored
+# variant (a measured gradient through the same pipeline every 5 steps) and the last-gradient
+# baseline. Compared with the noise-free and ZNE gradient-descent runs of the source study.
+#
+#   uv run kagome-vqe pidn configs/pidn/graph_hva_pidn_m2.toml
+name = "graph_hva_pidn_m2"
+description = """
+PIDN continuation of Stage I data measured through readout+symmetry (1x, 4x and 8x shots),
+readout+symmetry+twin, readout+ZNE and no mitigation, under depolarising p_e = 1e-3 + readout
+error 0.02; t_init = 10, 60 iterations in total; seeds 1-3.
+"""
+sources = [
+  "results/*-graph_hva_pidn_m2_relabel/runs/raw-s*",
+  "results/*-graph_hva_pidn_m2_relabel/runs/rs-s*",
+  "results/*-graph_hva_pidn_m2_relabel/runs/rst-s*",
+  "results/*-graph_hva_pidn_m2_relabel/runs/rzne-s*",
+  "results/*-graph_hva_pidn_m2_relabel/runs/rs_x4-s*",
+  "results/*-graph_hva_pidn_m2_relabel/runs/rs_x8-s*",
+]
+baseline_studies = ["results/*-graph_hva_zne_gd"]
+t_init = 10
+total_iterations = 60
+track_ideal = true
+
+[[variants]]
+label = "pidn_paper"
+
+[[variants]]
+label = "pidn_small"
+model = { gru_hidden = 8, noisy_hidden = 8, trunk = [32] }
+
+[[variants]]
+label = "pidn_anchor5"
+stage3 = { anchor_every = 5 }
+
+[[variants]]
+label = "last_gradient"
+model = { kind = "last_gradient" }
+stage3 = { measure_noisy = false }

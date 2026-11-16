@@ -502,6 +502,23 @@ def test_relabelled_stage_one_feeds_the_pidn_workflow(tmp_path: Path) -> None:
         }
     )
     study = run_pidn_study(cfg)
-    final = json.loads((study / "runs" / "last-s104731" / "result.json").read_text())
+    final = json.loads((study / "runs" / "last-m2-s104731" / "result.json").read_text())
     assert final["resources"]["stage1_circuit_executions"] == 4 * 9 * 3
     assert np.isfinite(final["final_zne_energy"])
+
+
+def test_target_quality_measures_gradient_noise() -> None:
+    from kagome_vqe.pidn.diagnostics import target_quality
+
+    rng = np.random.default_rng(9)
+    ideal = rng.normal(size=(10, 4))
+    traj = {
+        "grad": ideal + 0.1 * rng.normal(size=(10, 4)),
+        "ideal_grad": ideal,
+        "value": np.full(10, -1.0),
+        "ideal_energy": np.full(10, -1.2),
+    }
+    q = target_quality(traj, t_init=10)
+    assert q["cosine_to_ideal"] > 0.95
+    assert q["value_error_mean"] == pytest.approx(0.2)
+    assert q["signal_to_noise_late"] > 5

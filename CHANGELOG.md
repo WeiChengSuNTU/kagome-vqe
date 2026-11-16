@@ -16,6 +16,12 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- PIDN with M2-mitigated Stage I data (`docs/experiments/graph_hva_pidn_m2.md`):
+  `kagome_vqe.pidn.relabel` and CLI `pidn-relabel` (re-measure Stage I targets through another
+  pipeline on a fixed path), `pidn.diagnostics.target_quality`, `benchmarks/pidn_target_quality.py`,
+  `benchmarks/pidn_exact_targets_control.py`; PIDN run names carry the source pipeline; the PIDN
+  workflow keeps its estimators open (twin rescaling) and accepts `baseline_studies`; configs
+  `configs/pidn/graph_hva_pidn_m2*.toml`, `configs/studies/graph_hva_m2_gd.toml`.
 - PIDN (physics-informed denoising network, arXiv:2605.02066) surrogate optimisation
   (`docs/experiments/graph_hva_pidn.md`): `kagome_vqe.pidn` with a numpy autodiff engine
   supporting double backpropagation (`pidn.autodiff`), the dual-branch dual-head network,

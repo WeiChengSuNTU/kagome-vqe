@@ -1,0 +1,52 @@
+# Can M2-style mitigation give PIDN learnable training data? The Stage I points of the three ZNE
+# gradient-descent runs (configs/studies/graph_hva_zne_gd_representative.toml, seeds 1-3) are
+# re-measured through each pipeline below: the cost and the parameter-shift gradient at
+# theta_0 .. theta_9, and the raw noisy cost at all 20 recorded points. The parameter path is the
+# same for every pipeline, so only the measurement differs.
+#
+# Noise model for every pipeline ("full" of graph_hva_m2_fixed.toml): PRB 106 depolarising
+# p_e = 1e-3 plus readout error q = 0.02.
+#
+#   uv run kagome-vqe pidn-relabel configs/pidn/graph_hva_pidn_m2_relabel.toml --only raw-
+#   uv run kagome-vqe pidn-relabel configs/pidn/graph_hva_pidn_m2_relabel.toml \
+#       --resume results/<ts>-graph_hva_pidn_m2_relabel --only <pipeline>-s<seed>   # in parallel
+# Cost per seed on the shared machine: ~1.5 min (1024 shots), ~8 min (rs_x4), ~10 min (rzne),
+# ~17 min (rs_x8). (A 16x pipeline was tried first and did not finish within the 40-minute cap
+# per process; it was replaced by 8x.)
+name = "graph_hva_pidn_m2_relabel"
+description = """
+Stage I targets of the ZNE gradient-descent runs re-measured through M2-style pipelines under
+depolarising p_e = 1e-3 + readout error 0.02: none, readout+symmetry, readout+symmetry+twin,
+readout+ZNE, and readout+symmetry with 4x and 8x the shots.
+"""
+sources = ["results/*-graph_hva_zne_gd/runs/*-graph_hva_zne_gd-bm2x6-p2-noh0-dep0.001_zne-gd_ps-s[123]"]
+t_init = 10
+
+[[pipelines]]
+label = "raw"
+backend = { kind = "logical_noise", shots = 1024, final_shots = 16384, logical_noise = { channel = "depolarizing", probability = 1e-3, readout_error = 0.02, fast_kernels = true } }
+
+[[pipelines]]
+label = "rs"
+backend = { kind = "logical_noise", shots = 1024, final_shots = 16384, logical_noise = { channel = "depolarizing", probability = 1e-3, readout_error = 0.02, fast_kernels = true } }
+mitigation = { readout = true, symmetry = true }
+
+[[pipelines]]
+label = "rst"
+backend = { kind = "logical_noise", shots = 1024, final_shots = 16384, logical_noise = { channel = "depolarizing", probability = 1e-3, readout_error = 0.02, fast_kernels = true } }
+mitigation = { readout = true, symmetry = true, rescale = { twin = "auto" } }
+
+[[pipelines]]
+label = "rzne"
+backend = { kind = "logical_noise", shots = 1024, final_shots = 16384, logical_noise = { channel = "depolarizing", probability = 1e-3, readout_error = 0.02, fast_kernels = true } }
+mitigation = { readout = true, zne = { scales = [1, 2, 3], extrapolation = "exponential", noise_scaling = "probability" } }
+
+[[pipelines]]
+label = "rs_x4"
+backend = { kind = "logical_noise", shots = 4096, final_shots = 16384, logical_noise = { channel = "depolarizing", probability = 1e-3, readout_error = 0.02, fast_kernels = true } }
+mitigation = { readout = true, symmetry = true }
+
+[[pipelines]]
+label = "rs_x8"
+backend = { kind = "logical_noise", shots = 8192, final_shots = 16384, logical_noise = { channel = "depolarizing", probability = 1e-3, readout_error = 0.02, fast_kernels = true } }
+mitigation = { readout = true, symmetry = true }

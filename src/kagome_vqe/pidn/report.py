@@ -63,6 +63,15 @@ def _baselines(sources: list[str], studies_override: list[str] | None = None) ->
     return out
 
 
+def _method_label(res: dict[str, Any]) -> str:
+    """``PIDN <variant>`` or ``baseline <variant>``, with ``[pipeline]`` for relabelled data."""
+    kind = res.get("variant_config", {}).get("model", {}).get("kind", "pidn")
+    label = f"{'PIDN' if kind == 'pidn' else 'baseline'} {res['variant']}"
+    if res.get("source_pipeline"):
+        label += f" [{res['source_pipeline']}]"
+    return label
+
+
 def _baseline_override(study_dir: Path) -> list[str] | None:
     from kagome_vqe.config import load_toml
 
@@ -133,8 +142,7 @@ def write_pidn_summary(study_dir: Path) -> Path:
         cos_used = cosine(t["grad"], t["ideal_grad"])
         cos_surr = cosine(t["surrogate_grad"], t["ideal_grad"])
         stage3 = phase > 0
-        kind = res.get("variant_config", {}).get("model", {}).get("kind", "pidn")
-        label = f"{'PIDN' if kind == 'pidn' else 'baseline'} {res['variant']}"
+        label = _method_label(res)
         curves.append(
             pd.DataFrame(
                 {

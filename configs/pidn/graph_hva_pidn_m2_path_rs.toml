@@ -1,0 +1,30 @@
+# PIDN with a Stage I that was itself run through an M2 pipeline (readout+symmetry, 1024 shots per basis) under depolarising
+# p_e = 1e-3 + readout error 0.02 (configs/studies/graph_hva_m2_gd.toml), so the parameter path
+# (not only the targets) reflects the pipeline's signal-to-noise. t_init = 10, 60 iterations.
+#
+#   uv run kagome-vqe pidn configs/pidn/graph_hva_pidn_m2_path_rs.toml
+name = "graph_hva_pidn_m2_path_rs"
+description = """
+PIDN continuation of gradient descent with readout+symmetry, 1024 shots per basis (Stage I = its first 10 iterations); seeds 1-3.
+"""
+sources = ["results/*-graph_hva_m2_gd/runs/*-full_rs-gd_ps60-s[123]"]
+baseline_studies = ["results/*-graph_hva_m2_gd", "results/*-graph_hva_zne_gd"]
+t_init = 10
+total_iterations = 60
+track_ideal = true
+
+[[variants]]
+label = "pidn_paper"
+
+[[variants]]
+label = "pidn_small"
+model = { gru_hidden = 8, noisy_hidden = 8, trunk = [32] }
+
+[[variants]]
+label = "pidn_anchor5"
+stage3 = { anchor_every = 5 }
+
+[[variants]]
+label = "last_gradient"
+model = { kind = "last_gradient" }
+stage3 = { measure_noisy = false }

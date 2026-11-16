@@ -479,6 +479,7 @@ class _PidnRun:
         exact = float(self.run.result["exact_energy"])
         return {
             "variant": self.variant.label,
+            "source_pipeline": self.run.result.get("pipeline"),
             "source": str(self.source),
             "source_name": self.run.name,
             "seed": source_cfg.seed,
@@ -606,8 +607,14 @@ def run_pidn_study(
         for source in sources:
             from kagome_vqe.results import load_run
 
-            seed = load_run(source).config.seed
-            name = f"{variant.label}-s{seed}"
+            loaded = load_run(source)
+            seed = loaded.config.seed
+            pipeline = loaded.result.get("pipeline")  # relabelled Stage I (pidn.relabel)
+            name = (
+                f"{variant.label}-s{seed}"
+                if pipeline is None
+                else (f"{variant.label}-{pipeline}-s{seed}")
+            )
             if name in done or (only and not any(o in name for o in only)):
                 continue
             out = study_dir / "runs" / name

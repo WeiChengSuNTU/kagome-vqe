@@ -25,7 +25,7 @@ from kagome_vqe.pidn.model import build_batch
 from kagome_vqe.pidn.workflow import PidnVariant, _surrogate
 from kagome_vqe.trajectory_analysis import cosine
 
-__all__ = ["extrapolation_test"]
+__all__ = ["extrapolation_test", "target_quality"]
 
 
 def extrapolation_test(
@@ -93,3 +93,31 @@ def load_trajectory(run_dir: Path) -> dict[str, np.ndarray]:
     """``trajectory.npz`` of a run directory as a dictionary."""
     with np.load(Path(run_dir) / "trajectory.npz") as data:
         return {k: data[k] for k in data.files}
+
+
+def target_quality(trajectory: dict[str, np.ndarray], *, t_init: int) -> dict[str, float]:
+    """How good are the Stage I targets of a trajectory, against the noise-free reference?
+
+    Over the first ``t_init`` points: mean cosine of the measured gradient with the exact
+    noise-free gradient (also over the second half, where gradients are small), mean
+    ``|g - g_ideal|`` (the gradient noise PIDN is asked to learn), mean noise-free gradient norm,
+    and the mean and spread of the cost error ``value - E_ideal``.
+    """
+    grads = trajectory["grad"][:t_init]
+    ideal = trajectory["ideal_grad"][:t_init]
+    cos = cosine(grads, ideal)
+    half = t_init // 2
+    error = np.linalg.norm(grads - ideal, axis=1)
+    value_error = trajectory["value"][:t_init] - trajectory["ideal_energy"][:t_init]
+    return {
+        "cosine_to_ideal": float(np.mean(cos)),
+        "cosine_to_ideal_late": float(np.mean(cos[half:])),
+        "gradient_error": float(np.mean(error)),
+        "ideal_gradient_norm": float(np.mean(np.linalg.norm(ideal, axis=1))),
+        "ideal_gradient_norm_late": float(np.mean(np.linalg.norm(ideal[half:], axis=1))),
+        "signal_to_noise_late": float(
+            np.mean(np.linalg.norm(ideal[half:], axis=1)) / np.mean(error[half:])
+        ),
+        "value_error_mean": float(np.mean(value_error)),
+        "value_error_std": float(np.std(value_error, ddof=1)),
+    }

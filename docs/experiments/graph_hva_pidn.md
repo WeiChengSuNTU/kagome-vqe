@@ -222,6 +222,10 @@ SK, TFIM) and UCCSD molecules. Here, on a 32-parameter HVA with PRB 106 layer no
   points along one curve determine the gradient field only near that curve, and the
   continuation leaves it.
 
+Whether M2-style mitigation of the Stage I data changes this is tested in
+[`graph_hva_pidn_m2.md`](graph_hva_pidn_m2.md): it does not; the limit is the variance of the
+Stage I gradients and the noisy path they produce.
+
 What would have to change for PIDN to help here (next experiments, not done): many more shots
 per Stage I gradient (or averaging over a longer Stage I), so that the training targets have
 signal-to-noise > 1; regular re-anchoring with a *fallback* (use the measured gradient whenever
