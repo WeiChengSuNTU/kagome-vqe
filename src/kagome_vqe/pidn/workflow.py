@@ -31,6 +31,7 @@ at every iterate -- are computed classically, timed separately and never charged
 
 from __future__ import annotations
 
+import contextlib
 import glob
 import json
 import logging
@@ -148,6 +149,8 @@ class PidnStudyConfig(_Frozen):
         seed_offset: Stage III randomness is seeded by the source seed plus this offset (the
             same for every variant, so variants see common random numbers).
         variants: Surrogates to compare.
+        baseline_studies: Gradient-descent study directories (globs) shown as baselines in the
+            report; default: the studies the sources belong to.
     """
 
     name: str = "graph_hva_pidn"
@@ -162,6 +165,7 @@ class PidnStudyConfig(_Frozen):
     final_zne_shots: Annotated[int, Field(ge=1)] | None = None
     seed_offset: int = 7919
     variants: Annotated[list[PidnVariant], Field(min_length=1)]
+    baseline_studies: list[str] | None = None
 
     @model_validator(mode="after")
     def _checks(self) -> PidnStudyConfig:
@@ -235,13 +239,22 @@ class _Quantum:
             None,
             seed=seed + 1,
             mitigation=source_cfg.mitigation,
+            twin=self.prep.circuit_twin,
         )
+        # Opened for the whole run (a twin is measured once, on entry); see close().
+        self._stack = contextlib.ExitStack()
+        self._stack.enter_context(self._noisy)
+        self._stack.enter_context(self._zne)
         self._objective = EnergyObjective(self._zne, parameter_map=self.map)
         tracked = replace(
             self.prep, config=source_cfg.model_copy(update={"track_ideal_gradient": True})
         )
         self.ideal_gradient = _ideal_gradient_fn(tracked)
         self.ideal_energy = _ideal_energy_fn(self.prep)
+
+    def close(self) -> None:
+        """Release the estimators."""
+        self._stack.close()
 
     def noisy_energy(self, theta: np.ndarray) -> tuple[float, float]:
         batch = self._noisy.evaluate(self.map.expand(theta)[None, :])
@@ -501,12 +514,15 @@ def run_pidn_variant(
 ) -> dict[str, Any]:
     """One PIDN (or baseline) run continuing the ZNE run ``source``; writes ``out_dir``."""
     state = _PidnRun(cfg, variant, source)
-    state.train()
-    for t in range(state.t0, cfg.total_iterations):
-        if not state.step(t):
-            log.warning("%s: non-finite parameters at iteration %d; stopping", variant.label, t)
-            break
-    result = state.result()
+    try:
+        state.train()
+        for t in range(state.t0, cfg.total_iterations):
+            if not state.step(t):
+                log.warning("%s: non-finite parameters at iteration %d; stopping", variant.label, t)
+                break
+        result = state.result()
+    finally:
+        state.q.close()
     _save_run(out_dir, state.rows, result, state.surrogate, state.lr)
     return result
 

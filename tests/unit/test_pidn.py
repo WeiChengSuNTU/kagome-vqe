@@ -436,3 +436,72 @@ def test_pidn_continues_a_noise_free_run_at_no_circuit_cost(tmp_path: Path) -> N
     assert result["final_zne_energy"] == pytest.approx(result["final_ideal_energy"])
     with np.load(study / "runs" / "pidn-s3" / "trajectory.npz") as data:
         assert np.allclose(data["scale_values"][4:, 0], data["ideal_energy"][4:])
+
+
+def test_relabelled_stage_one_feeds_the_pidn_workflow(tmp_path: Path) -> None:
+    from kagome_vqe.pidn.relabel import RelabelConfig, run_relabel
+    from kagome_vqe.pidn.workflow import PidnStudyConfig, run_pidn_study
+
+    source = _zne_gd_source(tmp_path)
+    backend = {
+        "kind": "logical_noise",
+        "shots": 256,
+        "final_shots": 512,
+        "logical_noise": {
+            "channel": "depolarizing",
+            "probability": 0.01,
+            "readout_error": 0.02,
+            "fast_kernels": True,
+        },
+    }
+    relabel = RelabelConfig.model_validate(
+        {
+            "name": "relabel",
+            "sources": [str(source)],
+            "output_dir": str(tmp_path / "relabel"),
+            "t_init": 4,
+            "pipelines": [
+                {
+                    "label": "m2",
+                    "backend": backend,
+                    "mitigation": {"readout": True, "symmetry": True, "rescale": {"twin": "auto"}},
+                },
+            ],
+        }
+    )
+    out = run_relabel(relabel)
+    run_dir = out / "runs" / "m2-s2"
+    with np.load(run_dir / "trajectory.npz") as data:
+        traj = {k: data[k] for k in data.files}
+    with np.load(source / "trajectory.npz") as data:
+        original = {k: data[k] for k in data.files}
+    assert np.allclose(traj["theta"], original["theta"])
+    assert np.isfinite(traj["grad"][:4]).all()
+    assert np.isnan(traj["grad"][4:]).all()
+    assert np.isfinite(traj["scale_values"][:, 0]).all()
+    assert traj["evaluations"][3] == 4 * (2 * 4 + 1)
+    assert traj["circuit_executions"][3] == 4 * 9 * 3
+    result = json.loads((run_dir / "result.json").read_text())
+    assert len(result["gradient_cosine_to_ideal"]) == 4
+    assert "readout_calibration" in json.dumps(result["estimator"])
+    cfg = PidnStudyConfig.model_validate(
+        {
+            "name": "pidn-relabelled",
+            "sources": [str(run_dir)],
+            "output_dir": str(tmp_path / "pidn"),
+            "t_init": 4,
+            "total_iterations": 6,
+            "baseline_studies": [],
+            "variants": [
+                {
+                    "label": "last",
+                    "model": {"kind": "last_gradient"},
+                    "stage3": {"measure_noisy": False},
+                }
+            ],
+        }
+    )
+    study = run_pidn_study(cfg)
+    final = json.loads((study / "runs" / "last-s104731" / "result.json").read_text())
+    assert final["resources"]["stage1_circuit_executions"] == 4 * 9 * 3
+    assert np.isfinite(final["final_zne_energy"])

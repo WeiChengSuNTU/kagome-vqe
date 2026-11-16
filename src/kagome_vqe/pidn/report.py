@@ -48,14 +48,28 @@ def _load_pidn_runs(study_dir: Path) -> list[dict[str, Any]]:
     return runs
 
 
-def _baselines(sources: list[str]) -> list[Any]:
-    """Trajectories of the gradient-descent study the sources belong to."""
-    studies = {Path(s).parent.parent for s in sources}
+def _baselines(sources: list[str], studies_override: list[str] | None = None) -> list[Any]:
+    """Trajectories of the gradient-descent studies (default: those the sources belong to)."""
+    import glob
+
+    if studies_override:
+        studies = {Path(m) for pattern in studies_override for m in glob.glob(pattern)}
+    else:
+        studies = {Path(s).parent.parent for s in sources}
     out = []
     for study in sorted(studies):
         if (study / "manifest.jsonl").exists():
             out.extend(load_study_trajectories(study))
     return out
+
+
+def _baseline_override(study_dir: Path) -> list[str] | None:
+    from kagome_vqe.config import load_toml
+
+    if not (study_dir / "pidn.toml").exists():
+        return None
+    value = load_toml(study_dir / "pidn.toml").get("baseline_studies")
+    return None if value is None else [str(v) for v in value]
 
 
 def write_pidn_summary(study_dir: Path) -> Path:
@@ -66,7 +80,7 @@ def write_pidn_summary(study_dir: Path) -> Path:
     runs = _load_pidn_runs(study_dir)
     sources_path = study_dir / "sources.json"
     sources = json.loads(sources_path.read_text()) if sources_path.exists() else []
-    baselines = _baselines(sources)
+    baselines = _baselines(sources, _baseline_override(study_dir))
     exact = runs[0]["result"]["exact_energy"] if runs else math.nan
 
     curves: list[pd.DataFrame] = []

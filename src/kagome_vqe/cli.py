@@ -757,6 +757,29 @@ def pidn_summary(
     console.print(f"wrote {summarise_pidn_study(study_dir)}")
 
 
+@app.command(name="pidn-relabel")
+def pidn_relabel(
+    config: Annotated[Path, typer.Argument(help="Relabel TOML (configs/pidn/).")],
+    resume: Annotated[
+        Path | None,
+        typer.Option(help="Continue this relabel directory.", exists=True, file_okay=False),
+    ] = None,
+    only: Annotated[
+        list[str] | None, typer.Option(help="Only runs whose name contains this text.")
+    ] = None,
+) -> None:
+    """Re-measure Stage I costs and gradients of saved runs through other mitigation pipelines.
+
+    The parameter path is kept; each (pipeline, source) becomes a run directory that the PIDN
+    workflow and the open-loop test accept as a Stage I source.
+    """
+    from kagome_vqe.pidn.relabel import load_relabel_config, run_relabel
+
+    configure_logging(logging.INFO)
+    out = run_relabel(load_relabel_config(config), study_dir=resume, only=only)
+    console.print(f"relabel directory: {out}")
+
+
 # -- plot -------------------------------------------------------------------------------------
 
 
