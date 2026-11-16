@@ -571,6 +571,10 @@ class LogicalNoiseConfig(_Frozen):
         engine: ``"trajectories"`` (Pauli-error sampling per shot; only shots with an error are
             simulated) or ``"aer"`` (the same circuit on Aer, density matrices up to 12
             qubits). Both sample measurement outcomes shot by shot.
+        readout_error: Probability that a measured bit is flipped (independently per qubit and
+            shot; also in the readout calibration). Not part of PRB 106, which has no readout
+            noise; an extension so that the M2 readout correction has something to correct.
+            ``0`` (default) leaves every earlier run unchanged.
         fast_kernels: ``trajectories`` only: use the fast simulation kernels (exchange gates as
             ``a I + b SWAP``, cache-sized batches; about 2x faster). Same states to ~1e-16, but
             not bitwise the same samples as the reference kernels, so the default ``False``
@@ -582,17 +586,19 @@ class LogicalNoiseConfig(_Frozen):
     placement: Literal["paper_layers"] = "paper_layers"
     engine: Literal["trajectories", "aer"] = "trajectories"
     fast_kernels: bool = False
+    readout_error: Annotated[float, Field(ge=0, lt=0.5)] = 0.0
 
     @model_validator(mode="after")
     def _fast_is_trajectories(self) -> Self:
-        if self.fast_kernels and self.engine != "trajectories":
-            msg = "logical_noise.fast_kernels applies to engine = 'trajectories' only"
+        if (self.fast_kernels or self.readout_error) and self.engine != "trajectories":
+            msg = "logical_noise.fast_kernels / readout_error need engine = 'trajectories'"
             raise ValueError(msg)
         return self
 
     def label(self) -> str:
-        """``"depolarizing p=0.001"``."""
-        return f"{self.channel} p={self.probability:g}"
+        """``"depolarizing p=0.001"`` (``+ readout q=0.02`` with readout error)."""
+        base = f"{self.channel} p={self.probability:g}"
+        return base if not self.readout_error else f"{base} + readout q={self.readout_error:g}"
 
 
 class BackendConfig(_Frozen):
@@ -895,11 +901,9 @@ class RunConfig(_Frozen):
             if self.mapping.strategy != "generic":
                 problems.append("mapping.strategy = 'generic' (the logical circuit is not routed)")
             m = self.mitigation
-            if m.readout or m.symmetry or m.rescale is not None:
-                problems.append(
-                    "no readout, symmetry or twin mitigation (only ZNE is implemented on "
-                    "logical noise; the model has no readout error)"
-                )
+            noise = self.backend.logical_noise
+            if m.needs_counts and noise is not None and noise.engine != "trajectories":
+                problems.append("logical_noise.engine = 'trajectories' for readout / symmetry")
             if zne is not None and zne.noise_scaling == "gate_folding":
                 problems.append(
                     "zne.noise_scaling = 'probability' or 'layer_folding' (folding single "

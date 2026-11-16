@@ -16,6 +16,12 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- M2-style mitigation on PRB 106 layer noise (`docs/experiments/graph_hva_m2_mitigation.md`):
+  optional readout error `logical_noise.readout_error`; readout correction, symmetry (singlet
+  sector) filtering and twin rescaling on `logical_noise` (correct-then-filter ratio estimator
+  with delta-method standard errors, one-off calibration per estimator);
+  `kagome_vqe.mitigation_study` and CLI `mitigation-study` / `mitigation-summary` (fixed-point
+  table, fresh setup per repeat, `--workers`); config `configs/mitigation/graph_hva_m2_fixed.toml`.
 - Error mitigation for `graph_hva` under PRB 106 layer noise
   (`docs/experiments/graph_hva_mitigation.md`):
   - Exchange-gate parameter-shift rule: `unshare_parameters(..., exchange_gates=True)` treats

@@ -656,6 +656,50 @@ def zne_summary(
     console.print(f"wrote {summarise_zne_analysis(analysis_dir)}")
 
 
+@app.command(name="mitigation-study")
+def mitigation_study(
+    config: Annotated[Path, typer.Argument(help="Mitigation-study TOML (configs/mitigation/).")],
+    output_dir: Annotated[
+        Path | None, typer.Option(help="Parent of the new directory (default: config).")
+    ] = None,
+    only: Annotated[
+        list[str] | None, typer.Option(help="Only cells whose name contains this text.")
+    ] = None,
+    workers: Annotated[int, typer.Option(min=1, max=8, help="Cells in parallel processes.")] = 1,
+    dry_run: Annotated[bool, typer.Option("--dry-run", help="List the cells only.")] = False,
+) -> None:
+    """M2-style table: every mitigation stack at fixed parameters, repeated with fresh setups.
+
+    Reports the bias of the mean against the noise-free energy, the spread between repeats and
+    the shot cost, per (point, noise model, stack). Writes results/<timestamp>-<name>/.
+    """
+    from kagome_vqe.mitigation_study import load_mitigation_study_config, run_mitigation_study
+
+    configure_logging(logging.INFO)
+    cfg = load_mitigation_study_config(config)
+    if dry_run:
+        cells = [c[3].name for c in cfg.cells() if not only or any(o in c[3].name for o in only)]
+        console.print("\n".join(cells))
+        console.print(f"{len(cells)} cells x {cfg.repeats} repeats")
+        return
+    out = run_mitigation_study(cfg, output_root=output_dir, only=only, workers=workers)
+    console.print(f"study directory: {out}")
+    console.print(f"report: {out / 'report.md'}")
+
+
+@app.command(name="mitigation-summary")
+def mitigation_summary(
+    study_dir: Annotated[
+        Path, typer.Argument(help="A mitigation-study directory.", exists=True, file_okay=False)
+    ],
+) -> None:
+    """Regenerate a mitigation study's report from its saved points."""
+    from kagome_vqe.mitigation_study import summarise_mitigation_study
+
+    configure_logging(logging.INFO)
+    console.print(f"wrote {summarise_mitigation_study(study_dir)}")
+
+
 # -- plot -------------------------------------------------------------------------------------
 
 

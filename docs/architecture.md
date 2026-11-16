@@ -175,6 +175,10 @@ it is `noise.scale_noise_probability` (`p_e -> lambda p_e`) or `noise.fold_noise
 batch carries its per-scale energies. `ParameterShift` (exchange-gate rule for `graph_hva`)
 turns those into the gradient of the extrapolated cost (`zne_gradient_weights`), and
 `GradientDescent` records every iteration, which `run_vqe` saves as `trajectory.npz`.
+Readout correction and symmetry filtering run inside `LogicalNoiseEnergy` on the sampled
+histograms (correct-then-filter, as `mitigation/counts.py`), after an optional simulated readout
+error (`logical_noise.readout_error`); twin rescaling wraps everything, as for the other
+backends. `mitigation_study.py` produces the M2-style fixed-point table of stacks.
 `zne_analysis.py` characterises the ZNE methods on saved parameters with exact density
 matrices; `trajectory_analysis.py` scores recorded gradients against the exact noise-free
 gradient.
@@ -195,6 +199,8 @@ gradient.
 | `kagome-vqe noise-summary DIR` | regenerate a noise analysis's report and figures |
 | `kagome-vqe zne-analysis C [--dry-run] [--workers N]` | fixed-parameter ZNE characterisation of saved runs (`configs/mitigation/`) |
 | `kagome-vqe zne-summary DIR` | regenerate a ZNE analysis's report and figures |
+| `kagome-vqe mitigation-study C [--dry-run] [--only S] [--workers N]` | M2-style fixed-point table of mitigation stacks (`configs/mitigation/`) |
+| `kagome-vqe mitigation-summary DIR` | regenerate a mitigation study's report |
 | `kagome-vqe map C [-b ...]` | compile-only comparison of mapping strategies |
 | `kagome-vqe plot DIR... [--kind ideal]` | convergence or noise-free-error-versus-shots figures |
 | `kagome-vqe backends [--ibm]` | list fake (and IBM) backends |

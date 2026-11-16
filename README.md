@@ -212,9 +212,12 @@ rescale = { twin = "auto" }   # divide out the damping measured on a classically
 - **ZNE** multiplies the cost per energy by the number of scale factors.
 - **Twin rescaling** measures its twin once per run. The automatic twin needs a classical
   simulation, which is fine up to about 20 qubits.
-- On `logical_noise` (PRB 106 layer noise) only ZNE applies, with `noise_scaling =
-  "probability"` (`p_e -> lambda p_e`) or `"layer_folding"` (each noisy layer `L -> L (L^dag
-  L)^k`). With a parameter-shift gradient and `optimizer.measure_current = true` the gradient is
+- On `logical_noise` (PRB 106 layer noise) all four apply (an optional readout error,
+  `logical_noise.readout_error`, gives readout correction something to correct); ZNE uses
+  `noise_scaling = "probability"` (`p_e -> lambda p_e`) or `"layer_folding"` (each noisy layer
+  `L -> L (L^dag L)^k`). The M2 comparison on that model is in
+  [`docs/experiments/graph_hva_m2_mitigation.md`](docs/experiments/graph_hva_m2_mitigation.md)
+  (readout + symmetry: bias <= 0.4 % at no extra variance). With a parameter-shift gradient and `optimizer.measure_current = true` the gradient is
   that of the extrapolated cost, and every iteration is recorded in `trajectory.npz`; see
   [`docs/experiments/graph_hva_mitigation.md`](docs/experiments/graph_hva_mitigation.md).
 
@@ -238,6 +241,7 @@ commands, interpretation, limitations):
 | [`docs/experiments/graph_hva_noise.md`](docs/experiments/graph_hva_noise.md) | PRB 106 noise models and the fixed-parameter noise analysis (noise-free optima under local depolarising / bit-flip noise, Eq. 9 check), compiled-hardware noise kept separate | reproduction of the PRB 106 methodology on the 2x6 rectangle completed |
 | [`docs/experiments/graph_hva_noisy_optimizers.md`](docs/experiments/graph_hva_noisy_optimizers.md) | calibrated SPSA (with and without step control) vs ADAM + SPSA gradient under paper-layer noise, equal shot budgets, noise-free parameter quality, transfer of noise-free optima | new (not in PRB 106); smoke, pilot and limited comparison completed; full profile configured, not yet run |
 | [`docs/experiments/graph_hva_mitigation.md`](docs/experiments/graph_hva_mitigation.md) | ZNE on paper-layer noise (probability scaling, layer folding): fixed-parameter bias / variance / rmse from exact density matrices; parameter-shift gradient descent with and without ZNE; trajectory records for surrogate models | fixed-parameter characterisation and limited GD comparison completed |
+| [`docs/experiments/graph_hva_m2_mitigation.md`](docs/experiments/graph_hva_m2_mitigation.md) | the M2 comparison (readout correction, symmetry filtering, ZNE, twin rescaling, combined) for `graph_hva` on paper-layer noise with readout error, fixed parameters | completed |
 | [`docs/hardware.md`](docs/hardware.md) | compile-only mapping benchmarks on IBM Nighthawk and Heron | completed |
 | [`docs/roadmap.md`](docs/roadmap.md) | diagnosis of the noisy-energy gap and the milestone plan | living |
 
@@ -258,8 +262,8 @@ cancelling.
 * Optimiser conclusions for `graph_hva` so far rest on limited 12-site comparisons (three
   seeds); the full multi-seed studies, noise-free and noisy, are configured but not run.
 * Physical noise for `graph_hva` is the PRB 106 logical-layer model (`logical_noise`) or a fake
-  backend's model on the compiled circuit (`aer_noisy`). Error mitigation for `graph_hva` so far
-  is ZNE on the logical-layer model only; nothing has run on IBM hardware.
+  backend's model on the compiled circuit (`aer_noisy`). Error mitigation for `graph_hva` has
+  been characterised on the logical-layer model only; nothing has run on IBM hardware.
 
 ## Physics notes
 

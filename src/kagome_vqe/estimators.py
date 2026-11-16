@@ -385,6 +385,10 @@ class LogicalNoiseEnergy:
         aer_method: AerMethod = "auto",
         noise: dict[str, Any] | None = None,
         fast_kernels: bool = False,
+        readout_error: float = 0.0,
+        readout: bool = False,
+        symmetry: bool = False,
+        readout_shots: int = 16384,
     ) -> None:
         """Create the estimator."""
         from kagome_vqe.noise import (
@@ -420,10 +424,22 @@ class LogicalNoiseEnergy:
         else:
             self._simulator = PauliTrajectorySimulator(problem.circuit, fast=fast_kernels)
             self._bases = measurement_bases(problem.observable)
+        if (readout or symmetry or readout_error) and engine != "trajectories":
+            msg = "readout error and counts-level mitigation need engine = 'trajectories'"
+            raise ValueError(msg)
+        self._readout_error = float(readout_error)
+        self._readout = readout
+        self._symmetry = symmetry
+        self._readout_shots = readout_shots
+        self._calibration: tuple[FloatArray, FloatArray] | None = None
+        self._calibration_seed = None if seed is None else _calibration_seed(seed)
         self._description = {
             "kind": "logical_noise",
             "engine": engine,
             "fast_kernels": fast_kernels,
+            "readout_error": self._readout_error,
+            "readout_correction": readout,
+            "symmetry_filter": symmetry,
             "noise": noise,
             "noise_locations": noise_locations(problem.circuit),
             "shots": shots,
@@ -438,7 +454,77 @@ class LogicalNoiseEnergy:
         """Backend and options."""
         if self._aer is not None:
             return {**self._description, "aer": self._aer.description}
-        return dict(self._description)
+        out = dict(self._description)
+        if self._calibration is not None:
+            e0, e1 = self._calibration
+            out["readout_calibration"] = {
+                "shots_per_circuit": self._readout_shots,
+                "mean_e0": float(np.mean(e0)),
+                "mean_e1": float(np.mean(e1)),
+            }
+        return out
+
+    def _calibrate(self) -> FloatArray:
+        """Per-qubit inverse confusion matrices from all-0 / all-1 preparations (once)."""
+        from kagome_vqe.mitigation.counts import ReadoutCalibration
+
+        if self._calibration is None:
+            n = self._problem.circuit.num_qubits
+            rng = np.random.default_rng(self._calibration_seed)
+            q, shots = self._readout_error, self._readout_shots
+            e0 = rng.binomial(shots, q, size=n) / shots
+            e1 = rng.binomial(shots, q, size=n) / shots
+            self._calibration = (e0, e1)
+        e0, e1 = self._calibration
+        return ReadoutCalibration(e0, e1).inverse_matrices()
+
+    def _basis_statistics(
+        self, counts: NDArray[np.int64], diagonal: FloatArray, inverses: FloatArray | None
+    ) -> tuple[float, float]:
+        """Mean and variance of one basis's estimate (readout correction and symmetry filter).
+
+        Correct-then-filter as in :mod:`kagome_vqe.mitigation.counts`: the estimate is
+        ``sum_mask (A^-1 p) d / sum_mask (A^-1 p)``. Both sums are per-shot means of
+        ``u = A^-T (mask d)`` and ``v = A^-T mask``, so the ratio's variance follows from the
+        per-shot covariance (delta method); without correction or filter it reduces to the plain
+        mean and variance of ``d``.
+        """
+        from kagome_vqe.mitigation.counts import _apply_inverse
+
+        shots = float(counts.sum())
+        dim = counts.size
+        mask = np.ones(dim)
+        if self._symmetry:
+            n = self._problem.circuit.num_qubits
+            weight = np.bitwise_count(np.arange(dim, dtype=np.int64)).astype(np.int64)
+            mask = (weight == n // 2).astype(float)
+        u, v = diagonal * mask, mask
+        if inverses is not None:
+            transposed = np.transpose(inverses, (0, 2, 1))
+            u, v = _apply_inverse(u, transposed), _apply_inverse(v, transposed)
+        p = counts / shots
+        u_mean, v_mean = float(p @ u), float(p @ v)
+        if not self._symmetry and inverses is None:
+            return u_mean, max(float(p @ u**2) - u_mean**2, 0.0) / shots
+        if v_mean <= 0:
+            log.warning("symmetry filter kept no weight; using the unfiltered estimate")
+            return float(p @ diagonal), float(p @ diagonal**2 - (p @ diagonal) ** 2) / shots
+        ratio = u_mean / v_mean
+        var_u = float(p @ u**2) - u_mean**2
+        var_v = float(p @ v**2) - v_mean**2
+        cov = float(p @ (u * v)) - u_mean * v_mean
+        variance = (var_u - 2 * ratio * cov + ratio**2 * var_v) / (shots * v_mean**2)
+        return ratio, max(variance, 0.0)
+
+    def _readout_noise(
+        self, counts: NDArray[np.int64], rng: np.random.Generator
+    ) -> NDArray[np.int64]:
+        """Flip every measured bit independently with probability ``readout_error``."""
+        n = self._problem.circuit.num_qubits
+        outcomes = np.repeat(np.arange(counts.size, dtype=np.int64), counts)
+        flips = rng.random((outcomes.size, n)) < self._readout_error
+        outcomes ^= (flips.astype(np.int64) << np.arange(n, dtype=np.int64)).sum(axis=1)
+        return np.bincount(outcomes, minlength=counts.size).astype(np.int64)
 
     def evaluate(self, params: FloatArray, *, shots: int | None = None) -> EnergyBatch:
         """Sampled energies, every row with fresh noise and measurement randomness."""
@@ -452,15 +538,17 @@ class LogicalNoiseEnergy:
         energies = np.empty(rows.shape[0])
         stds = np.empty(rows.shape[0])
         letters = [basis for basis, _ in self._bases]
+        inverses = self._calibrate() if self._readout else None
         for i, theta in enumerate(rows):
             histograms = self._simulator.sample_measurements(theta, letters, n_shots, rng)
             mean = 0.0
             variance = 0.0
             for counts, (_, diagonal) in zip(histograms, self._bases, strict=True):
-                first = float(counts @ diagonal) / n_shots
-                second = float(counts @ diagonal**2) / n_shots
+                if self._readout_error > 0:
+                    counts = self._readout_noise(counts, rng)  # noqa: PLW2901
+                first, var = self._basis_statistics(counts, diagonal, inverses)
                 mean += first
-                variance += max(second - first**2, 0.0) / n_shots
+                variance += var
             energies[i] = mean
             stds[i] = math.sqrt(variance)
         return EnergyBatch(
@@ -732,7 +820,11 @@ def aer_noise_model(backend: Any, noise: str) -> Any | None:
 
 
 def _base_estimator(
-    cfg: BackendConfig, problem: IsaProblem, backend: Any | None, seed: int | None
+    cfg: BackendConfig,
+    problem: IsaProblem,
+    backend: Any | None,
+    seed: int | None,
+    counts: MitigationConfig | None = None,
 ) -> EnergyEstimator:
     if cfg.kind == "statevector":
         return StatevectorEnergy(problem, seed=seed)
@@ -749,6 +841,10 @@ def _base_estimator(
             aer_method=cfg.aer_method,
             noise=cfg.logical_noise.model_dump(),
             fast_kernels=cfg.logical_noise.fast_kernels,
+            readout_error=cfg.logical_noise.readout_error,
+            readout=counts.readout if counts is not None else False,
+            symmetry=counts.symmetry if counts is not None else False,
+            readout_shots=counts.readout_shots if counts is not None else 16384,
         )
     if cfg.kind == "aer_noisy":
         return AerEnergy(
@@ -763,6 +859,11 @@ def _base_estimator(
         msg = f"backend.kind={cfg.kind!r} needs a backend object"
         raise ValueError(msg)
     return RuntimeEnergy(problem, backend, cfg, seed=seed)
+
+
+def _calibration_seed(seed: int) -> int:
+    """Seed of a logical-noise estimator's one-off readout calibration."""
+    return int(np.random.SeedSequence([seed, 7_000_003]).generate_state(1)[0])
 
 
 def _spawn_seed(seed: int, index: int) -> int:
@@ -804,6 +905,8 @@ def make_estimator(
     from kagome_vqe.mitigation import CountsEnergy, TwinRescaledEnergy, ZneEnergy
 
     def inner(prob: IsaProblem) -> EnergyEstimator:
+        if cfg.kind == "logical_noise":  # counts-level mitigation inside the sampler
+            return _base_estimator(cfg, prob, backend, seed, mitigation)
         if mitigation.needs_counts:
             return CountsEnergy(
                 prob,
@@ -829,7 +932,7 @@ def make_estimator(
         def inner_at(prob: IsaProblem, index: int) -> EnergyEstimator:
             # Independent randomness per noise scale, as separate hardware jobs would have.
             scale_seed = None if seed is None else _spawn_seed(seed, index)
-            return _base_estimator(cfg, prob, backend, scale_seed)
+            return _base_estimator(cfg, prob, backend, scale_seed, mitigation)
 
         estimator = ZneEnergy(
             problem,
