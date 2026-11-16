@@ -12,7 +12,8 @@ gradient (the paper's Fig. 4 uses the ZNE gradient as reference).
 
 Speed-up as in the paper's Eq. 45: circuit executions ZNE gradient descent needs to reach a
 target error divided by what PIDN needs, the target being the error ZNE gradient descent reaches
-at the end of its budget (per seed). Reported as "not reached" when PIDN never gets there.
+at the end of its budget (per seed). A surrogate run counts as reaching it only if it ends at or
+below the target, at its first surrogate-phase point below it; otherwise "not reached" (``-``).
 """
 
 from __future__ import annotations
@@ -137,9 +138,11 @@ def write_pidn_summary(study_dir: Path) -> Path:
         target, zne_exec = targets.get(int(res["seed"]), (math.nan, math.nan))
         all_err = np.append(err, final_err if final_err is not None else np.nan)
         all_exec = np.append(t["circuit_executions"], t["circuit_executions"][-1])
-        pidn_exec = (
-            _first_reaching(all_exec, all_err, target) if math.isfinite(target) else math.nan
-        )
+        # Reached only if the run *ends* at or below the target, counted from the surrogate
+        # phase on (Stage I is the ZNE run itself, which may dip below its own final error).
+        t0 = int(res["t_init"])
+        ends_below = final_err is not None and math.isfinite(target) and final_err <= target
+        pidn_exec = _first_reaching(all_exec[t0:], all_err[t0:], target) if ends_below else math.nan
         r = res["resources"]
         rows.append(
             {
@@ -200,7 +203,7 @@ def _report(study_dir: Path, table: pd.DataFrame, exact: float) -> str:
         "gradient and the exact noise-free gradient during the surrogate phase; for the",
         "gradient-descent baselines the mean over iterations >= 10 of the gradient actually used.",
         "Speed-up: circuit executions ZNE-GD needs to reach its own final error / executions",
-        "the method needs (paper Eq. 45); `-` if the method never reaches it.",
+        "the method needs (paper Eq. 45); `-` if the method does not end at or below it.",
         "",
         "| method | seeds | iterations | circuit executions | error at t_init | final error "
         "(worst) | cos | speed-up (per seed) |",
@@ -223,17 +226,14 @@ def _report(study_dir: Path, table: pd.DataFrame, exact: float) -> str:
     return "\n".join(lines) + "\n"
 
 
-def _figures(curves: pd.DataFrame, runs: list[dict[str, Any]], out_dir: Path) -> None:
-    import matplotlib
+_HEADLINE = ("pidn_paper", "pidn_anchor10", "pidn_nonoisy", "last_gradient", "quadratic")
 
-    matplotlib.use("Agg")
+
+def _error_figure(curves: pd.DataFrame, methods: list[str], path: Path) -> None:
     import matplotlib.pyplot as plt
 
-    out_dir.mkdir(parents=True, exist_ok=True)
-    methods = list(dict.fromkeys(curves["method"]))
-    colours = dict(
-        zip(methods, plt.cm.tab10(np.linspace(0, 1, max(len(methods), 2))), strict=False)
-    )
+    palette = plt.cm.tab20(np.linspace(0, 1, 20))
+    colours = {m: palette[i % 20] for i, m in enumerate(methods)}
     seeds = sorted(curves["seed"].unique())
     surrogate_rows = curves["method"].str.startswith(("PIDN", "baseline"))
     by_cost = bool((curves.loc[surrogate_rows, "executions"] > 0).any())
@@ -244,7 +244,8 @@ def _figures(curves: pd.DataFrame, runs: list[dict[str, Any]], out_dir: Path) ->
             sub = curves[(curves["method"] == method) & (curves["seed"] == seed)]
             if sub.empty or (by_cost and not np.any(sub["executions"] > 0)):
                 continue
-            ax.plot(sub[x_key], sub["error"], color=colours[method], lw=1.3, label=method)
+            style = "-" if str(method).startswith("GD") else "--"
+            ax.plot(sub[x_key], sub["error"], style, color=colours[method], lw=1.3, label=method)
         if by_cost:
             ax.set_xscale("log")
         ax.set_yscale("log")
@@ -255,22 +256,39 @@ def _figures(curves: pd.DataFrame, runs: list[dict[str, Any]], out_dir: Path) ->
     if axes[0][-1].get_legend_handles_labels()[0]:
         axes[0][-1].legend(fontsize=6)
     fig.tight_layout()
-    fig.savefig(out_dir / "error_vs_executions.png", dpi=150)
+    fig.savefig(path, dpi=150)
     plt.close(fig)
 
+
+def _figures(curves: pd.DataFrame, runs: list[dict[str, Any]], out_dir: Path) -> None:
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    methods = list(dict.fromkeys(curves["method"]))
+    _error_figure(curves, methods, out_dir / "error_vs_executions.png")
+    headline = [
+        m for m in methods if m.startswith("GD") or m.split(" ", 1)[-1] in _HEADLINE
+    ] or methods
+    _error_figure(curves, headline, out_dir / "error_vs_executions_main.png")
+
+    palette = plt.cm.tab20(np.linspace(0, 1, 20))
     fig, ax = plt.subplots(figsize=(6.5, 4))
-    for method in methods:
+    for i, method in enumerate(headline):
         sub = curves[curves["method"] == method]
         mean = sub.groupby("iteration")["cosine"].mean()
-        ax.plot(mean.index, mean.values, color=colours[method], lw=1.3, label=method)
+        ax.plot(mean.index, mean.values, color=palette[i % 20], lw=1.3, label=method)
+    ax.axhline(0, color="k", lw=0.8)
     ax.set_xlabel("iteration")
     ax.set_ylabel("cos(gradient, noise-free gradient), seed mean")
     ax.grid(alpha=0.3)
-    ax.legend(fontsize=6)
+    if ax.get_legend_handles_labels()[0]:
+        ax.legend(fontsize=6)
     fig.tight_layout()
     fig.savefig(out_dir / "gradient_cosine.png", dpi=150)
     plt.close(fig)
-
     _training_figure(runs, out_dir)
 
 

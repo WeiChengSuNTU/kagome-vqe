@@ -179,6 +179,13 @@ turns those into the gradient of the extrapolated cost (`zne_gradient_weights`),
 matrices; `trajectory_analysis.py` scores recorded gradients against the exact noise-free
 gradient.
 
+**Trajectory surrogates** (`pidn/`, [`experiments/graph_hva_pidn.md`](experiments/graph_hva_pidn.md)):
+`pidn.workflow` reads Stage I from a saved run's `trajectory.npz`, trains a surrogate
+(`pidn.model`, `pidn.training`; the network runs on the dependency-free `pidn.autodiff`) and
+continues the descent with it on the source run's backend, writing a `trajectory.npz` of the
+same schema plus surrogate gradients, so `trajectory_analysis` and `pidn.report` compare it with
+the gradient-descent baselines.
+
 ## 6. Command line
 
 | command | purpose |
@@ -195,6 +202,8 @@ gradient.
 | `kagome-vqe noise-summary DIR` | regenerate a noise analysis's report and figures |
 | `kagome-vqe zne-analysis C [--dry-run] [--workers N]` | fixed-parameter ZNE characterisation of saved runs (`configs/mitigation/`) |
 | `kagome-vqe zne-summary DIR` | regenerate a ZNE analysis's report and figures |
+| `kagome-vqe pidn C [--dry-run] [--resume DIR] [--only S] [--no-summary]` | PIDN / surrogate continuation of saved ZNE gradient-descent runs (`configs/pidn/`) |
+| `kagome-vqe pidn-summary DIR` | regenerate a PIDN study's report and figures |
 | `kagome-vqe map C [-b ...]` | compile-only comparison of mapping strategies |
 | `kagome-vqe plot DIR... [--kind ideal]` | convergence or noise-free-error-versus-shots figures |
 | `kagome-vqe backends [--ibm]` | list fake (and IBM) backends |

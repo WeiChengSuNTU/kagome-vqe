@@ -16,6 +16,15 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- PIDN (physics-informed denoising network, arXiv:2605.02066) surrogate optimisation
+  (`docs/experiments/graph_hva_pidn.md`): `kagome_vqe.pidn` with a numpy autodiff engine
+  supporting double backpropagation (`pidn.autodiff`), the dual-branch dual-head network,
+  ensembles and the normalised `L_data + beta L_phys` training (`pidn.model`, `pidn.training`),
+  non-neural baselines (local quadratic model, last gradient), the three-stage workflow on saved
+  ZNE gradient-descent trajectories with cost accounting, trust region and online ZNE anchors
+  (`pidn.workflow`), study reports (`pidn.report`) and an open-loop extrapolation test
+  (`pidn.diagnostics`, `benchmarks/pidn_extrapolation_check.py`); CLI `pidn`, `pidn-summary`;
+  configs in `configs/pidn/`. No new dependency.
 - Error mitigation for `graph_hva` under PRB 106 layer noise
   (`docs/experiments/graph_hva_mitigation.md`):
   - Exchange-gate parameter-shift rule: `unshare_parameters(..., exchange_gates=True)` treats
