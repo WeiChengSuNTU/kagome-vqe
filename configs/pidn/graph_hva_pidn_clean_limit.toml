@@ -1,0 +1,44 @@
+# Upper bound for PIDN on this problem: the same workflow with *noise-free* Stage I data.
+# Sources are the noise-free (statevector) parameter-shift gradient-descent runs of
+# configs/studies/graph_hva_zne_gd_representative.toml: exact energies and gradients for the
+# first t_init iterations, exact "noisy" costs in Stage III. No shots and no circuit cost are
+# counted (exact simulation). If a variant cannot continue the descent here, noisy data will
+# not help it.
+#
+#   uv run kagome-vqe pidn configs/pidn/graph_hva_pidn_clean_limit.toml
+name = "graph_hva_pidn_clean"
+description = """
+PIDN with noise-free Stage I data (statevector parameter-shift gradient descent, lr = 0.05,
+graph_hva p = 2 on the 2x6 rectangle, seeds 1-3): t_init = 10, continued to 60 iterations; the
+paper-style network, Fourier features, trust region, no physics loss, and the two non-neural
+baselines. Compared with the noise-free gradient descent of the same seeds.
+"""
+sources = ["results/*-graph_hva_zne_gd/runs/*-graph_hva_zne_gd-bm2x6-p2-noh0-sv-gd_ps-s[123]"]
+t_init = 10
+total_iterations = 60
+track_ideal = true
+
+[[variants]]
+label = "pidn_paper"
+
+[[variants]]
+label = "pidn_nophys"
+training = { beta = 0.0 }
+
+[[variants]]
+label = "pidn_fourier"
+model = { features = "fourier" }
+
+[[variants]]
+label = "pidn_trust"
+stage3 = { max_step_factor = 1.5 }
+
+[[variants]]
+label = "quadratic"
+model = { kind = "quadratic" }
+stage3 = { measure_noisy = false }
+
+[[variants]]
+label = "last_gradient"
+model = { kind = "last_gradient" }
+stage3 = { measure_noisy = false }

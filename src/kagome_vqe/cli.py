@@ -656,6 +656,63 @@ def zne_summary(
     console.print(f"wrote {summarise_zne_analysis(analysis_dir)}")
 
 
+# -- PIDN ----------------------------------------------------------------------------------------
+
+
+@app.command(name="pidn")
+def pidn(
+    config: Annotated[Path, typer.Argument(help="PIDN study TOML (configs/pidn/).")],
+    resume: Annotated[
+        Path | None,
+        typer.Option(help="Continue this PIDN study directory.", exists=True, file_okay=False),
+    ] = None,
+    only: Annotated[
+        list[str] | None, typer.Option(help="Only runs whose name contains this text.")
+    ] = None,
+    summary: Annotated[
+        bool, typer.Option("--summary/--no-summary", help="Write summary/ at the end.")
+    ] = True,
+    dry_run: Annotated[
+        bool, typer.Option("--dry-run", help="List the sources and the runs only.")
+    ] = False,
+) -> None:
+    """Continue saved ZNE gradient-descent runs with a PIDN surrogate (or a baseline).
+
+    Stage I is read from each source's trajectory.npz (first t_init iterations, cost charged
+    as recorded); Stage II trains the surrogate; Stage III steps with it, measuring only the
+    noisy cost per step. Every variant runs on every source. Writes results/<ts>-<name>/.
+    """
+    from kagome_vqe.pidn.workflow import load_pidn_config, resolve_pidn_sources, run_pidn_study
+
+    configure_logging(logging.INFO)
+    cfg = load_pidn_config(config)
+    if dry_run:
+        table = Table("source", "variants")
+        for source in resolve_pidn_sources(cfg):
+            table.add_row(source.name, ", ".join(v.label for v in cfg.variants))
+        console.print(table)
+        console.print(
+            f"t_init = {cfg.t_init}, total iterations = {cfg.total_iterations}; "
+            f"{len(cfg.variants)} variants"
+        )
+        return
+    out = run_pidn_study(cfg, study_dir=resume, only=only, summarise=summary)
+    console.print(f"PIDN study directory: {out}")
+
+
+@app.command(name="pidn-summary")
+def pidn_summary(
+    study_dir: Annotated[
+        Path, typer.Argument(help="A PIDN study directory.", exists=True, file_okay=False)
+    ],
+) -> None:
+    """Regenerate a PIDN study's summary (tables, comparison, figures)."""
+    from kagome_vqe.pidn.workflow import summarise_pidn_study
+
+    configure_logging(logging.INFO)
+    console.print(f"wrote {summarise_pidn_study(study_dir)}")
+
+
 # -- plot -------------------------------------------------------------------------------------
 
 

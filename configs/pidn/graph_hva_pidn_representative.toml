@@ -1,0 +1,88 @@
+# PIDN (Liu & Wang, arXiv:2605.02066) on the PRB 105 2x6 rectangle, graph_hva p = 2, PRB 106
+# paper-layer depolarising noise p_e = 1e-3, seeds 1-3. Stage I is the first t_init iterations
+# of the ZNE gradient-descent runs of configs/studies/graph_hva_zne_gd_representative.toml
+# (parameter shift, ZNE probability scaling 1, 2, 3, linear); their circuit executions are
+# charged to every PIDN run. Stage III continues to 60 iterations in total (the iteration count
+# of the unmitigated gradient-descent baseline with the same shot budget as 20 ZNE iterations).
+#
+#   uv run kagome-vqe pidn configs/pidn/graph_hva_pidn_representative.toml --dry-run
+#   uv run kagome-vqe pidn configs/pidn/graph_hva_pidn_representative.toml
+#   (parallel: --only <variant>- per process and --no-summary, then --resume <dir>; finally
+#    kagome-vqe pidn-summary <dir>)
+#
+# The paper does not specify the network; "pidn_paper" is the reading of its Sec. III B
+# described in docs/experiments/graph_hva_pidn.md, every other variant changes one thing.
+name = "graph_hva_pidn"
+description = """
+PIDN continuation of ZNE gradient descent (graph_hva p = 2, 2x6 rectangle, depolarising p_e =
+1e-3, 1024 shots per basis and scale), seeds 1-3: the paper-style network, one-change ablations
+(no physics loss, time-ordered early stopping, Fourier features, no noisy input, no GRU,
+smaller network, ReLU, step-head update, trust region, online ZNE anchors, t_init = 5 and 15)
+and two non-neural baselines (local quadratic model, last ZNE gradient).
+"""
+sources = ["results/*-graph_hva_zne_gd/runs/*-graph_hva_zne_gd-bm2x6-p2-noh0-dep0.001_zne-gd_ps-s[123]"]
+t_init = 10
+total_iterations = 60
+track_ideal = true
+
+[[variants]]
+label = "pidn_paper"
+
+[[variants]]
+label = "pidn_nophys"
+training = { beta = 0.0 }
+
+[[variants]]
+label = "pidn_earlystop"
+training = { validation_fraction = 0.2 }
+
+[[variants]]
+label = "pidn_fourier"
+model = { features = "fourier" }
+
+[[variants]]
+label = "pidn_nonoisy"
+model = { noisy_hidden = 0 }
+stage3 = { measure_noisy = false }
+
+[[variants]]
+label = "pidn_nogru"
+model = { gru_hidden = 0 }
+
+[[variants]]
+label = "pidn_small"
+model = { gru_hidden = 8, noisy_hidden = 8, trunk = [32] }
+
+[[variants]]
+label = "pidn_relu"
+model = { activation = "relu" }
+
+[[variants]]
+label = "pidn_stephead"
+stage3 = { update = "step_head" }
+
+[[variants]]
+label = "pidn_trust"
+stage3 = { max_step_factor = 1.5 }
+
+[[variants]]
+label = "pidn_anchor10"
+stage3 = { max_step_factor = 1.5, anchor_every = 10 }
+
+[[variants]]
+label = "pidn_t5"
+t_init = 5
+
+[[variants]]
+label = "pidn_t15"
+t_init = 15
+
+[[variants]]
+label = "quadratic"
+model = { kind = "quadratic" }
+stage3 = { measure_noisy = false }
+
+[[variants]]
+label = "last_gradient"
+model = { kind = "last_gradient" }
+stage3 = { measure_noisy = false }
