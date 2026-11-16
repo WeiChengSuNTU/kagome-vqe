@@ -238,7 +238,17 @@ def test_logical_noise_config_round_trips_through_toml() -> None:
     [
         ({"ansatz": {"type": "hva", "reps": 1}}, "graph_hva"),
         ({"mapping": {"strategy": "prb105"}}, "not routed"),
-        ({"mitigation": {"readout": True}}, "mitigation"),
+        (
+            {
+                "mitigation": {"readout": True},
+                "backend": {
+                    "kind": "logical_noise",
+                    "shots": 8,
+                    "logical_noise": {"engine": "aer"},
+                },
+            },
+            "trajectories",
+        ),
         ({"mitigation": {"zne": {"scales": [1, 3]}}}, "layer_folding"),
     ],
 )

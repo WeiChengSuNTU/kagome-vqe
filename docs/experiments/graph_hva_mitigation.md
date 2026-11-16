@@ -56,8 +56,8 @@ the noise locations themselves (`[mitigation.zne] noise_scaling`):
 Each noise scale gets its own random stream (independent jobs). `scales` must start with 1;
 `metadata.final_zne` records the per-scale energies of the final re-measurement, so the
 unmitigated energy of the same shots is always available. Readout correction, symmetry
-filtering and twin rescaling are rejected on `logical_noise` (the model has no readout error;
-those stacks are tied to the compiled-circuit sampler).
+filtering and twin rescaling on `logical_noise` (with an optional readout error) are compared
+with ZNE in [`graph_hva_m2_mitigation.md`](graph_hva_m2_mitigation.md).
 
 ### 1.3 Gradient of the extrapolated cost
 
@@ -239,7 +239,8 @@ zne = { scales = [1, 2, 3], extrapolation = "linear", noise_scaling = "probabili
   crosstalk and readout error, has not been mitigated with these tools yet.
 * Probability scaling is a simulation device. Layer folding is the device-realisable variant
   and costs `lambda` times deeper circuits; the GD study uses probability scaling.
-* No readout or symmetry mitigation on `logical_noise` (there is no readout error to correct).
+* The other M2 techniques (readout, symmetry, twin) are characterised in
+  [`graph_hva_m2_mitigation.md`](graph_hva_m2_mitigation.md), not inside gradient descent.
 
 ## 6. Engine note: fast kernels
 

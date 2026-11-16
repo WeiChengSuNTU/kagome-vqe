@@ -309,7 +309,17 @@ def test_zne_config_scales() -> None:
     ("update", "message"),
     [
         ({"mitigation": {"zne": {"scales": [1, 3]}}}, "probability' or 'layer_folding"),
-        ({"mitigation": {"readout": True}}, "no readout"),
+        (
+            {
+                "mitigation": {"symmetry": True},
+                "backend": {
+                    "kind": "logical_noise",
+                    "shots": 8,
+                    "logical_noise": {"engine": "aer"},
+                },
+            },
+            "trajectories",
+        ),
         (
             {
                 "mitigation": {"zne": {"scales": [1, 2], "noise_scaling": "probability"}},
