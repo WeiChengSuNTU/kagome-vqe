@@ -1,0 +1,65 @@
+# Error-mitigated gradient descent on the PRB 105 2x6 rectangle (graph_hva p = 2, no H0),
+# seeds 1-3, from the same initial point per seed. Parameter-shift gradients (exchange-gate
+# rule: two energies per gate, 64 + 1 energies per iteration with the current point) under
+# PRB 106 paper-layer depolarising noise p_e = 1e-3, with and without ZNE (probability
+# scaling lambda = 1, 2, 3, linear fit; the extrapolated gradient by the chain rule).
+#
+# Every shot-based backend has the same shot budget: 20 ZNE iterations x 65 energies x 3 scales
+# x 3 bases x 1024 shots = 11,980,800 shots (+ the final evaluation), i.e. 60 unmitigated
+# iterations. The noise-free (statevector) and shots-only (p_e = 0) references get the same 60
+# iterations. Every run records trajectory.npz (theta_t, C(theta_t) per noise scale, per-scale
+# and extrapolated gradients, the exact noise-free gradient) -- the training data of a
+# trajectory surrogate such as PIDN.
+#
+#   uv run kagome-vqe study configs/studies/graph_hva_zne_gd_representative.toml --dry-run
+#   uv run kagome-vqe study configs/studies/graph_hva_zne_gd_representative.toml
+#   (several processes can share one study with disjoint --only filters and --no-summary,
+#    then kagome-vqe study-summary <dir>)
+name = "graph_hva_zne_gd"
+description = """
+Parameter-shift gradient descent (lr = 0.05) on the PRB 105 2x6 rectangle, graph_hva p = 2
+without H0 (32 parameters, 32 exchange gates), seeds 1-3. Backends: noise-free statevector and
+shots-only (p_e = 0) references, PRB 106 paper-layer depolarising noise p_e = 1e-3 unmitigated
+and with ZNE (probability scaling 1, 2, 3, linear). Equal shot budget of 11,980,800 shots on every
+shot-based backend (60 unmitigated or 20 ZNE iterations); 1024 shots per basis and scale.
+"""
+seeds = [1, 2, 3]
+x0_scale = 0.1
+reps = [2]
+include_h0 = [false]
+success_threshold = 0.025
+track_ideal_gradient = true
+
+[ansatz]
+type = "graph_hva"
+
+[[lattices]]
+label = "bm2x6"
+lattice = { kind = "kagome_bm_rectangle", rows = 2, cols = 6 }
+schedule = "prb105"
+
+[[backends]]
+label = "sv"
+backend = { kind = "statevector" }
+budget = { max_evaluations = 3901 }
+
+[[backends]]
+label = "shots"
+backend = { kind = "logical_noise", shots = 1024, final_shots = 16384, logical_noise = { channel = "depolarizing", probability = 0.0, fast_kernels = true } }
+budget = { max_shots = 11990016 }
+
+[[backends]]
+label = "dep0.001"
+backend = { kind = "logical_noise", shots = 1024, final_shots = 16384, logical_noise = { channel = "depolarizing", probability = 1e-3, fast_kernels = true } }
+budget = { max_shots = 11990016 }
+
+[[backends]]
+label = "dep0.001_zne"
+backend = { kind = "logical_noise", shots = 1024, final_shots = 16384, logical_noise = { channel = "depolarizing", probability = 1e-3, fast_kernels = true } }
+budget = { max_shots = 11990016 }
+mitigation = { zne = { scales = [1, 2, 3], extrapolation = "linear", noise_scaling = "probability" } }
+
+[[optimizers]]
+label = "gd_ps"
+fit_maxiter_to_budget = true
+optimizer = { type = "gd", gradient = "parameter_shift", lr = 0.05, measure_current = true }

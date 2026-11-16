@@ -23,6 +23,8 @@ from kagome_vqe.mitigation.wrappers import (
     ZneEnergy,
     choose_twin,
     extrapolate,
+    extrapolation_coefficients,
+    zne_gradient_weights,
 )
 
 __all__ = [
@@ -34,5 +36,7 @@ __all__ = [
     "ZneEnergy",
     "choose_twin",
     "extrapolate",
+    "extrapolation_coefficients",
     "measurement_plan",
+    "zne_gradient_weights",
 ]

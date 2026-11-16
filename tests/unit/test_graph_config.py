@@ -219,8 +219,9 @@ def test_parameter_shift_with_graph_hva_runs() -> None:
     result = run_vqe(cfg)
     assert result.optimal_params.size == 10
     assert result.nit == 3
-    # each gradient shifts every one of the 30 rotation occurrences (3 per exchange gate) twice
-    assert result.nfev >= 3 * 2 * 30
+    # graph_hva uses the exchange-gate shift rule (pi/4, two energies per gate): each gradient
+    # shifts each of the 10 exchange gates twice (before: 30 rotation occurrences)
+    assert result.nfev == 3 * 2 * 10 + 1
 
 
 # -- command line ---------------------------------------------------------------------------

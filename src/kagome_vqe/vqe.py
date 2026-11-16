@@ -124,6 +124,8 @@ class EnergyObjective:
         self._max_shots: int | None = None
         self._shots_per_evaluation = 0
         self._shot_cost: Callable[[int], int] = lambda measured: measured
+        self.last_scales: dict[str, Any] | None = None
+        """Per-noise-scale raw energies of the last batch (ZNE estimators), else ``None``."""
 
     def set_budget(
         self,
@@ -211,6 +213,7 @@ class EnergyObjective:
     def _evaluate(self, phis: FloatArray, thetas: FloatArray) -> FloatArray:
         self._check_budget(phis.shape[0])
         result = self._estimator.evaluate(phis)
+        self.last_scales = result.scales
         per_eval = result.wall_time_s / max(1, phis.shape[0])
         for x, energy, std in zip(thetas, result.energies, result.stds, strict=True):
             row = TraceRow(
@@ -372,6 +375,9 @@ class VQERunResult:
             structure and parameter count, noise model and placement, optimiser and gradient
             estimator, termination.
         iterates: The optimiser's parameters after every iteration, ``iterates[0] = x0``.
+        trajectory: Per-iteration gradient record of gradient-descent runs with
+            ``optimizer.measure_current`` (the data set a trajectory surrogate such as PIDN
+            learns from), see :func:`gradient_trajectory`; ``None`` otherwise.
     """
 
     config: RunConfig
@@ -398,6 +404,7 @@ class VQERunResult:
     resources: dict[str, Any] = field(default_factory=dict)
     metadata: dict[str, Any] = field(default_factory=dict)
     iterates: list[FloatArray] = field(default_factory=list)
+    trajectory: dict[str, np.ndarray] | None = None
 
     @property
     def ideal_relative_error(self) -> float | None:
@@ -441,8 +448,10 @@ def prepare(cfg: RunConfig, *, settings: Settings | None = None) -> Prepared:
     hamiltonian = heisenberg_hamiltonian(lattice)
     ansatz = cfg.ansatz.build(lattice)
     circuit = ansatz.build()
+    # graph_hva: one shift rule per exchange gate (pi/4, two energies) instead of per rotation.
+    exchange = isinstance(ansatz, GraphHVAnsatz)
     if cfg.optimizer.uses_parameter_shift:
-        circuit, parameter_map = unshare_parameters(circuit)
+        circuit, parameter_map = unshare_parameters(circuit, exchange_gates=exchange)
     else:
         parameter_map = ParameterMap.identity(ansatz.num_parameters)
     backend = resolve_backend(cfg.backend, settings)
@@ -548,14 +557,19 @@ def _logical_noise_problem(
     cfg: RunConfig, ansatz: Ansatz, hamiltonian: SparsePauliOp
 ) -> IsaProblem:
     """The logical circuit with PRB 106 layer noise: nothing is routed or transpiled."""
-    from kagome_vqe.noise import layer_noise_circuit
+    from kagome_vqe.noise import insert_layer_noise, layer_noise_circuit
 
     noise = cfg.backend.logical_noise
     assert noise is not None
     if not isinstance(ansatz, GraphHVAnsatz):  # guaranteed by RunConfig validation
         msg = "logical noise needs the graph_hva ansatz"
         raise TypeError(msg)
-    circuit = layer_noise_circuit(ansatz, noise.channel, noise.probability)
+    if cfg.optimizer.uses_parameter_shift:
+        # Same occurrence parameters as prepare()'s unshared circuit (barriers carry none).
+        marked, _ = unshare_parameters(ansatz.build(mark_noise_locations=True), exchange_gates=True)
+        circuit = insert_layer_noise(marked, noise.channel, noise.probability)
+    else:
+        circuit = layer_noise_circuit(ansatz, noise.channel, noise.probability)
     problem = compile_for_backend(circuit, hamiltonian, None)
     # compile_for_backend(None) only decomposes composite gates; keep the gates as built.
     problem = problem.with_circuit(circuit)
@@ -635,6 +649,105 @@ def _fidelity(prep: Prepared, theta: FloatArray) -> float | None:
     circuit = prep.ansatz.build()
     state = Statevector(circuit.assign_parameters(np.asarray(theta, dtype=float)))
     return ground_state_fidelity(state.data, space)
+
+
+def _ideal_gradient_fn(prep: Prepared) -> Callable[[FloatArray], FloatArray] | None:
+    """Exact noise-free gradient (statevector parameter shift), if requested and small enough."""
+    if not prep.config.track_ideal_gradient or prep.lattice.num_sites > IDEAL_TRACKING_MAX_QUBITS:
+        return None
+    circuit, mapping = unshare_parameters(
+        prep.ansatz.build(), exchange_gates=isinstance(prep.ansatz, GraphHVAnsatz)
+    )
+    estimator = StatevectorEnergy(compile_for_backend(circuit, prep.hamiltonian, None))
+    k = mapping.num_occurrences
+    shifts = mapping.occurrence_shifts[:, None] * np.eye(k)
+    coefficients = mapping.occurrence_coefficients
+
+    def gradient(theta: FloatArray) -> FloatArray:
+        phi = mapping.expand(np.asarray(theta, dtype=float))
+        energies = estimator.evaluate(np.vstack([phi + shifts, phi - shifts])).energies
+        return mapping.contract(coefficients * (energies[:k] - energies[k:]))
+
+    return gradient
+
+
+def gradient_trajectory(
+    records: list[dict[str, Any]],
+    *,
+    final_x: FloatArray,
+    learning_rate: float,
+    trace: list[TraceRow],
+    executions_per_evaluation: int,
+    shots_of: Callable[[int], int],
+    ideal_energy: dict[int, float],
+    ideal_gradient: Callable[[FloatArray], FloatArray] | None = None,
+) -> dict[str, np.ndarray]:
+    """Arrays of a gradient-descent trajectory (``trajectory.npz``), one row per iteration ``t``.
+
+    ``theta[t]`` is the point the gradient was taken at and ``theta_next[t] = theta[t] -
+    learning_rate * grad[t]``. ``value[t]`` is the cost the run measured at ``theta[t]``
+    (zero-noise extrapolated under ZNE). Per noise scale ``lambda``: ``scale_values[t, l]``
+    (``C_lambda(theta_t)``; scale 1 is the raw noisy energy), ``scale_grads[t, l]`` and the
+    chain-rule weights ``zne_weights[t, l]`` with ``grad[t] = zne_weights[t] @
+    scale_grads[t]``. Without ZNE there is one scale (``lambda = 1``). Cumulative resources
+    after iteration ``t``: ``evaluations``, ``circuit_executions``, ``shots``.
+    ``ideal_energy`` / ``ideal_grad`` are noise-free reference values (classical bookkeeping;
+    NaN when not tracked).
+    """
+    theta = np.vstack([r["theta"] for r in records])
+    grad = np.vstack([r["grad"] for r in records])
+    n_iter, n = theta.shape
+    value = np.array([np.nan if r["value"] is None else r["value"] for r in records])
+    evaluations = np.array([r["nfev"] for r in records], dtype=np.int64)
+    first_rows = [int(r["nfev"]) - _batch_size(records, i) for i, r in enumerate(records)]
+    value_std = np.array(
+        [
+            trace[i].std if 0 <= i < len(trace) and math.isfinite(v) else np.nan
+            for i, v in zip(first_rows, value, strict=True)
+        ]
+    )
+    details = [r["details"] for r in records]
+    if all("scales" in d for d in details):
+        scales = np.asarray(details[0]["scales"], dtype=float)
+        scale_values = np.vstack([d["scale_values"] for d in details])
+        scale_stds = np.vstack([d["scale_stds"] for d in details])
+        scale_grads = np.stack([d["scale_grads"] for d in details])
+        weights = np.vstack([d["weights"] for d in details])
+    else:
+        scales = np.ones(1)
+        scale_values = value[:, None]
+        scale_stds = value_std[:, None]
+        scale_grads = grad[:, None, :]
+        weights = np.ones((n_iter, 1))
+    theta_next = np.vstack([theta[1:], np.asarray(final_x, dtype=float)[None, :]])
+    ideal_grad = (
+        np.vstack([ideal_gradient(t) for t in theta])
+        if ideal_gradient is not None
+        else np.full((n_iter, n), np.nan)
+    )
+    return {
+        "theta": theta,
+        "theta_next": theta_next,
+        "grad": grad,
+        "value": value,
+        "value_std": value_std,
+        "scales": scales,
+        "scale_values": scale_values,
+        "scale_stds": scale_stds,
+        "scale_grads": scale_grads,
+        "zne_weights": weights,
+        "learning_rate": np.array(learning_rate, dtype=float),
+        "evaluations": evaluations,
+        "circuit_executions": evaluations * executions_per_evaluation,
+        "shots": np.array([shots_of(int(e)) for e in evaluations], dtype=np.int64),
+        "ideal_energy": np.array([ideal_energy.get(t, np.nan) for t in range(n_iter)]),
+        "ideal_grad": ideal_grad,
+    }
+
+
+def _batch_size(records: list[dict[str, Any]], i: int) -> int:
+    previous = int(records[i - 1]["nfev"]) if i else 0
+    return int(records[i]["nfev"]) - previous
 
 
 class _IdealTracker:
@@ -777,6 +890,24 @@ def run_vqe(
     if not math.isfinite(opt.fun):
         opt.fun = final_energy
 
+    trajectory = None
+    ideal_gradient_time = 0.0
+    records = getattr(optimizer, "records", None)
+    if records and cfg.optimizer.measure_current:
+        tick = time.perf_counter()
+        shots = cfg.backend.shots or 0
+        trajectory = gradient_trajectory(
+            records,
+            final_x=np.asarray(opt.x, dtype=float),
+            learning_rate=float(getattr(optimizer, "learning_rate", cfg.optimizer.lr)),
+            trace=objective.trace,
+            executions_per_evaluation=groups * _scale_factors(cfg),
+            shots_of=lambda evals: _shot_cost(cfg, groups, evals * shots),
+            ideal_energy={p.iteration: p.ideal_energy for p in tracker.trace},
+            ideal_gradient=_ideal_gradient_fn(prep),
+        )
+        ideal_gradient_time = time.perf_counter() - tick
+
     post_start = time.perf_counter()
     ideal_energy = tracker.energy(opt.x)
     fidelity = None if not tracker.enabled else _fidelity(prep, np.asarray(opt.x, float))
@@ -792,6 +923,7 @@ def run_vqe(
             "wall_time_s": elapsed,
             "optimisation_wall_time_s": optimisation_end - start,
             "ideal_tracking_time_s": tracker.time_s,
+            "ideal_gradient_time_s": ideal_gradient_time,
             "optimiser_wall_time_s": optimisation_end - start - tracker.time_s,
             "analysis_time_s": time.perf_counter() - post_start,
         },
@@ -822,9 +954,15 @@ def run_vqe(
         ideal_fidelity=fidelity,
         resources=resources,
         metadata=_run_metadata(
-            prep, optimizer, opt, budget_exhausted=exhausted, iterates=tracker.iterates
+            prep,
+            optimizer,
+            opt,
+            budget_exhausted=exhausted,
+            iterates=tracker.iterates,
+            final_scales=final.scales,
         ),
         iterates=tracker.iterates,
+        trajectory=trajectory,
     )
     log.info(
         "%s finished: E_final=%.6f (exact %.6f, rel. err %.2e), %d evaluations in %.1fs",
@@ -880,10 +1018,23 @@ def _run_metadata(
     *,
     budget_exhausted: bool,
     iterates: list[FloatArray] | None = None,
+    final_scales: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """:func:`problem_metadata` plus the optimiser actually used and why it stopped."""
+    """:func:`problem_metadata` plus the optimiser actually used and why it stopped.
+
+    Under ZNE, ``final_zne`` records the re-measurement's raw energy per noise scale
+    (``unmitigated_energy`` is scale 1, what the same shots give without mitigation).
+    """
     cfg = prep.config
     metadata = problem_metadata(prep)
+    if final_scales is not None:
+        metadata["final_zne"] = {
+            "scales": [float(f) for f in final_scales["scales"]],
+            "energies": [float(e) for e in np.asarray(final_scales["energies"])[:, 0]],
+            "stds": [float(e) for e in np.asarray(final_scales["stds"])[:, 0]],
+            "extrapolation": final_scales["extrapolation"],
+            "unmitigated_energy": float(np.asarray(final_scales["energies"])[0, 0]),
+        }
     metadata["optimizer"] = {
         "label": cfg.optimizer.label(),
         "implementation": repr(optimizer),

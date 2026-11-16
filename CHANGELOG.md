@@ -6,7 +6,40 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- `graph_hva` with `gradient = "parameter_shift"` now uses the exchange-gate rule: 2 energies per
+  exchange gate instead of 6 (one per rotation); gradients are identical, evaluation counts
+  are 3x lower. The ring ansatzes are unchanged.
+- `zne.scales` must start with 1; `logical_noise` accepts ZNE (probability scaling or layer
+  folding) and parameter-shift gradients.
+
 ### Added
+
+- Error mitigation for `graph_hva` under PRB 106 layer noise
+  (`docs/experiments/graph_hva_mitigation.md`):
+  - Exchange-gate parameter-shift rule: `unshare_parameters(..., exchange_gates=True)` treats
+    `RZZ RYY RXX` with one angle as one occurrence (shift `pi/4`, factor 1; generator gap 2);
+    `ParameterMap.shifts` / `.coefficients`; `ParameterShift(include_value=True)`.
+  - ZNE on `logical_noise`: `[mitigation.zne] noise_scaling = "probability"` (`p_e -> lambda
+    p_e`, `noise.scale_noise_probability`) or `"layer_folding"` (`L -> L (L^dag L)^k` with noise
+    after every copy, `noise.fold_noise_layers`); independent seeds per scale; `ZneEnergy`
+    takes a custom amplification and returns the per-scale energies (`EnergyBatch.scales`).
+  - ZNE gradients by the chain rule over per-scale parameter-shift gradients
+    (`mitigation.zne_gradient_weights`, `extrapolation_coefficients`).
+  - Gradient trajectories: `optimizer.measure_current`, `RunConfig.track_ideal_gradient`,
+    `GradientDescent.records`, `vqe.gradient_trajectory`, `trajectory.npz` per run
+    (`LoadedRun.trajectory`); `metadata.final_zne` (per-scale final energies).
+  - Fixed-parameter ZNE characterisation `kagome_vqe.zne_analysis`, CLI `zne-analysis`
+    (`--dry-run`, `--workers`) and `zne-summary`; configs in `configs/mitigation/`.
+  - `kagome_vqe.trajectory_analysis` (gradient cosine / error against the exact noise-free
+    gradient, cost curves); study summaries add `trajectories.md` when runs saved trajectories.
+  - Studies: `StudyBackend.mitigation`, `StudyConfig.track_ideal_gradient`; budgets and dry-run
+    costs count every noise scale; `fit_maxiter_to_budget` for parameter-shift gradients.
+  - `logical_noise.fast_kernels` (opt-in): exchange gates as `a I + b SWAP`, butterfly basis
+    rotations, cache-sized trajectory batches (~2x faster; reference kernels stay the default
+    and reproduce earlier runs bit for bit).
+  - Study profile `configs/studies/graph_hva_zne_gd_representative.toml`.
 
 - PRB 106 paper-layer noise (`docs/experiments/graph_hva_noise.md`):
   - `kagome_vqe.noise`: depolarising and bit-flip channels in the paper's parametrisation

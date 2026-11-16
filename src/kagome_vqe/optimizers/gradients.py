@@ -22,8 +22,8 @@ ansatz parameters and ``K`` the number of parameterised gates (36 for HVA, 12 fo
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass
-from typing import Protocol, runtime_checkable
+from dataclasses import dataclass, field
+from typing import Any, Protocol, runtime_checkable
 
 import numpy as np
 
@@ -51,11 +51,14 @@ class GradientEstimate:
         grad: Estimated gradient, shape ``(n,)``.
         value: Estimate of the cost at the current point, if the rows contained one.
         nfev: Energies spent.
+        details: Estimator-specific extras, e.g. the per-noise-scale values and gradients of a
+            zero-noise-extrapolated parameter-shift gradient (see :class:`ParameterShift`).
     """
 
     grad: FloatArray
     value: float | None
     nfev: int
+    details: dict[str, Any] = field(default_factory=dict)
 
 
 @runtime_checkable
@@ -211,24 +214,45 @@ class SimultaneousPerturbation:
 
 
 class ParameterShift:
-    """Exact (shot-noise-limited) gradients from the two-term shift rule, per gate occurrence.
+    """Exact (shot-noise-limited) gradients from two-term shift rules, per gate occurrence.
 
-    For each of the ``K`` parameterised gates, evaluate the circuit with that gate's angle
-    shifted by ``+pi/2`` and ``-pi/2``; half the difference is the derivative with respect to
-    that occurrence. Occurrences are then summed per ansatz parameter
-    (:meth:`ParameterMap.contract`). The objective must evaluate the *unshared* circuit, which
-    :func:`kagome_vqe.vqe.prepare` compiles when ``optimizer.gradient = "parameter_shift"``.
+    For each of the ``K`` parameterised gate occurrences, evaluate the circuit with that
+    occurrence's angle shifted by ``+s`` and ``-s``; ``r [E(+s) - E(-s)]`` is the derivative
+    with respect to that occurrence (``s = pi/2, r = 1/2`` for Pauli rotations; ``s = pi/4,
+    r = 1`` for exchange gates, see :mod:`kagome_vqe.ansatz.unshare`). Occurrences are then
+    summed per ansatz parameter (:meth:`ParameterMap.contract`). The objective must evaluate the
+    *unshared* circuit, which :func:`kagome_vqe.vqe.prepare` compiles when
+    ``optimizer.gradient = "parameter_shift"``.
+
+    With ``include_value=True`` the unshifted point is evaluated in the same batch (one extra
+    energy), so the cost at the current point is known: this is what a trajectory record needs
+    (``C(theta_t)`` alongside ``g(theta_t)``).
+
+    **Zero-noise extrapolation.** If the objective exposes the per-noise-scale energies of its
+    last batch (``objective.last_scales``, set by :class:`~kagome_vqe.vqe.EnergyObjective` over
+    a ZNE estimator), the gradient is the derivative of the *extrapolated* cost: per scale
+    ``lambda`` the shift rule gives ``g_lambda``, and ``g_ZNE = sum_lambda w_lambda g_lambda``
+    with ``w_lambda = dE_ZNE / dE_lambda`` evaluated at the current point
+    (:func:`kagome_vqe.mitigation.zne_gradient_weights`). For polynomial fits ``w`` are the fit
+    coefficients, so this equals extrapolating each gradient component; for the exponential fit
+    it is the chain rule. Requires ``include_value=True`` (the weights need ``E_lambda`` at the
+    current point). ``details`` then carries ``scales``, ``scale_values``, ``scale_stds``,
+    ``scale_grads`` and ``weights``.
 
     Args:
         parameter_map: Occurrence-to-parameter map of the compiled circuit. ``None`` means every
-            parameter occurs once (then any objective works).
+            parameter occurs once as a Pauli rotation (then any objective works).
+        include_value: Also evaluate the unshifted point (row 0 of the batch).
     """
 
     SHIFT = np.pi / 2
 
-    def __init__(self, parameter_map: ParameterMap | None = None) -> None:
+    def __init__(
+        self, parameter_map: ParameterMap | None = None, *, include_value: bool = False
+    ) -> None:
         """Create the estimator."""
         self.parameter_map = parameter_map
+        self.include_value = include_value
 
     @property
     def name(self) -> str:
@@ -241,16 +265,19 @@ class ParameterShift:
         return False
 
     def evaluations(self, num_parameters: int) -> int:
-        """``2K``: two energies per gate occurrence."""
+        """``2K`` (``2K + 1`` with ``include_value``): two energies per gate occurrence."""
         k = num_parameters if self.parameter_map is None else self.parameter_map.num_occurrences
-        return 2 * k
+        return 2 * k + int(self.include_value)
 
     def estimate(self, objective: Objective, x: FloatArray) -> GradientEstimate:
-        """One batch of ``2K`` rows in circuit-parameter space."""
+        """One batch of ``2K`` (or ``2K + 1``) rows in circuit-parameter space."""
         mapping = self.parameter_map or ParameterMap.identity(x.size)
         phi = mapping.expand(x)
-        shifts = self.SHIFT * np.eye(mapping.num_occurrences)
+        k = mapping.num_occurrences
+        shifts = mapping.occurrence_shifts[:, None] * np.eye(k)
         rows = np.vstack([phi[None, :] + shifts, phi[None, :] - shifts])
+        if self.include_value:
+            rows = np.vstack([phi[None, :], rows])
         if isinstance(objective, ExpandableObjective):
             values = objective.batch_expanded(rows, base=x)
         elif mapping.is_identity:
@@ -258,9 +285,44 @@ class ParameterShift:
         else:
             msg = "parameter shift with shared parameters needs an ExpandableObjective"
             raise TypeError(msg)
+        offset = int(self.include_value)
+        coefficients = mapping.occurrence_coefficients
+        scales = getattr(objective, "last_scales", None)
+        if scales is None or not self.include_value:
+            plus, minus = values[offset : offset + k], values[offset + k :]
+            grad = mapping.contract(coefficients * (plus - minus))
+            value = float(values[0]) if self.include_value else None
+            return GradientEstimate(grad, value, rows.shape[0])
+        return self._extrapolated(mapping, coefficients, scales, float(values[0]), rows.shape[0])
+
+    @staticmethod
+    def _extrapolated(
+        mapping: ParameterMap,
+        coefficients: FloatArray,
+        scales: dict[str, Any],
+        value: float,
+        nfev: int,
+    ) -> GradientEstimate:
+        from kagome_vqe.mitigation.wrappers import zne_gradient_weights
+
         k = mapping.num_occurrences
-        grad_phi = (values[:k] - values[k:]) / 2.0
-        return GradientEstimate(mapping.contract(grad_phi), None, rows.shape[0])
+        energies = np.asarray(scales["energies"], dtype=float)  # (L, rows)
+        stds = np.asarray(scales["stds"], dtype=float)
+        factors = tuple(float(f) for f in scales["scales"])
+        plus, minus = energies[:, 1 : 1 + k], energies[:, 1 + k :]
+        scale_grads = np.vstack(
+            [mapping.contract(coefficients * (p - m)) for p, m in zip(plus, minus, strict=True)]
+        )
+        weights = zne_gradient_weights(factors, energies[:, 0], stds[:, 0], scales["extrapolation"])
+        grad = np.asarray(weights @ scale_grads, dtype=float)
+        details = {
+            "scales": np.asarray(factors, dtype=float),
+            "scale_values": energies[:, 0].copy(),
+            "scale_stds": stds[:, 0].copy(),
+            "scale_grads": scale_grads,
+            "weights": weights,
+        }
+        return GradientEstimate(grad, value, nfev, details)
 
 
 def make_gradient(
@@ -270,13 +332,18 @@ def make_gradient(
     perturbation: float = 0.1,
     rng: np.random.Generator | None = None,
     parameter_map: ParameterMap | None = None,
+    include_value: bool = False,
 ) -> GradientEstimator:
-    """Build an estimator by name: ``forward``, ``central``, ``spsa`` or ``parameter_shift``."""
+    """Build an estimator by name: ``forward``, ``central``, ``spsa`` or ``parameter_shift``.
+
+    ``include_value`` applies to ``parameter_shift`` only (finite differences and SPSA already
+    report a value).
+    """
     factories: dict[str, Callable[[], GradientEstimator]] = {
         "forward": lambda: ForwardDifference(fd_eps),
         "central": lambda: CentralDifference(fd_eps),
         "spsa": lambda: SimultaneousPerturbation(perturbation, rng),
-        "parameter_shift": lambda: ParameterShift(parameter_map),
+        "parameter_shift": lambda: ParameterShift(parameter_map, include_value=include_value),
     }
     if kind not in factories:
         msg = f"unknown gradient estimator {kind!r}; choose from {sorted(factories)}"

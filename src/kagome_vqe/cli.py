@@ -604,6 +604,58 @@ def noise_summary(
     console.print(f"wrote {summarise_noise_analysis(analysis_dir)}")
 
 
+@app.command(name="zne-analysis")
+def zne_analysis(
+    config: Annotated[Path, typer.Argument(help="ZNE-analysis TOML (configs/mitigation/).")],
+    output_dir: Annotated[Path, typer.Option(help="Parent of the new analysis directory.")] = Path(
+        "results"
+    ),
+    dry_run: Annotated[
+        bool, typer.Option("--dry-run", help="List the matched runs and the work only.")
+    ] = False,
+    workers: Annotated[
+        int, typer.Option(min=1, max=8, help="Source runs analysed in parallel processes.")
+    ] = 1,
+) -> None:
+    """Characterise ZNE on saved parameters under PRB 106 layer noise (exact density matrices).
+
+    For each matched run, channel and p_e: the exact noisy energy at every noise scale of every
+    method (probability scaling, layer folding), the remaining bias of each extrapolation, the
+    standard error at the configured shots and the rmse, next to the unmitigated values.
+    """
+    from kagome_vqe.zne_analysis import load_zne_analysis_config, resolve_sources, run_zne_analysis
+
+    configure_logging(logging.INFO)
+    cfg = load_zne_analysis_config(config)
+    if dry_run:
+        sources = resolve_sources(cfg)
+        levels = cfg.levels()
+        table = Table("run", "density matrices")
+        for source in sources:
+            table.add_row(
+                source.name, str(len(levels) * len(cfg.channels) * len(cfg.probabilities))
+            )
+        console.print(table)
+        console.print(f"noise levels per (channel, p_e): {levels}")
+        return
+    out = run_zne_analysis(cfg, output_root=output_dir, workers=workers)
+    console.print(f"analysis directory: {out}")
+    console.print(f"report: {out / 'report.md'}")
+
+
+@app.command(name="zne-summary")
+def zne_summary(
+    analysis_dir: Annotated[
+        Path, typer.Argument(help="A ZNE-analysis directory.", exists=True, file_okay=False)
+    ],
+) -> None:
+    """Regenerate a ZNE analysis's report and figures from its saved levels and points."""
+    from kagome_vqe.zne_analysis import summarise_zne_analysis
+
+    configure_logging(logging.INFO)
+    console.print(f"wrote {summarise_zne_analysis(analysis_dir)}")
+
+
 # -- plot -------------------------------------------------------------------------------------
 
 

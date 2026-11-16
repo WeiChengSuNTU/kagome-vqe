@@ -51,11 +51,13 @@ __all__ = [
     "TrajectorySample",
     "aer_circuit",
     "exact_noisy_state",
+    "fold_noise_layers",
     "insert_layer_noise",
     "kraus_operators",
     "layer_noise_circuit",
     "noise_locations",
     "pauli_probabilities",
+    "scale_noise_probability",
     "survival_probability",
 ]
 
@@ -159,6 +161,80 @@ def layer_noise_circuit(ansatz: GraphHVAnsatz, channel: NoiseChannel, p: float) 
     return insert_layer_noise(ansatz.build(mark_noise_locations=True), channel, p)
 
 
+def scale_noise_probability(circuit: QuantumCircuit, factor: float) -> QuantumCircuit:
+    """Multiply the error probability of every :class:`PauliChannel` by ``factor``.
+
+    Zero-noise extrapolation by probability scaling: the gates are untouched and each
+    location's Pauli probabilities ``(px, py, pz)`` become ``factor (px, py, pz)``, i.e.
+    ``p_e -> factor p_e`` for both PRB 106 channels.
+
+    Raises:
+        ValueError: If a scaled channel would have total error probability above 1.
+    """
+    out = QuantumCircuit(*circuit.qregs, *circuit.cregs, name=circuit.name)
+    for inst in circuit.data:
+        op = inst.operation
+        if isinstance(op, PauliChannel):
+            px, py, pz = (factor * p for p in op.probabilities)
+            if px + py + pz > 1 + 1e-12:
+                msg = f"noise scale {factor:g} makes an error probability exceed 1"
+                raise ValueError(msg)
+            op = PauliChannel(px, py, pz, label=op.label)
+        out.append(op, inst.qubits, inst.clbits)
+    return out
+
+
+def fold_noise_layers(circuit: QuantumCircuit, folds: int) -> QuantumCircuit:
+    """Digital noise amplification of layer noise: ``L -> L (L^dag L)^folds``, noise after each.
+
+    The circuit is cut into its noisy layers: a block of gates ``L`` followed by the channels of
+    one noise location (the singlet preparation, then every exchange layer). Each block is
+    replaced by ``L N (L^dag N L N)^folds`` where ``N`` are its channels, so the unitary is
+    unchanged and the number of noise locations grows by exactly ``2 folds + 1``.
+    Parameterised gates are inverted symbolically (``RZZ(theta)^dag = RZZ(-theta)``), so the
+    folded circuit keeps the original parameters.
+    """
+    if folds < 0:
+        msg = "folds must be >= 0"
+        raise ValueError(msg)
+    out = QuantumCircuit(*circuit.qregs, *circuit.cregs, name=circuit.name)
+    if folds == 0:
+        out.compose(circuit, inplace=True)
+        return out
+    gates: list[Any] = []
+    channels: list[Any] = []
+
+    def flush() -> None:
+        for inst in gates + channels:
+            out.append(inst.operation, inst.qubits, inst.clbits)
+        for _ in range(folds):
+            for inst in reversed(gates):
+                out.append(inst.operation.inverse(), inst.qubits, inst.clbits)
+            for inst in channels:
+                out.append(inst.operation, inst.qubits, inst.clbits)
+            for inst in gates + channels:
+                out.append(inst.operation, inst.qubits, inst.clbits)
+        gates.clear()
+        channels.clear()
+
+    for inst in circuit.data:
+        op = inst.operation
+        if isinstance(op, PauliChannel):
+            channels.append(inst)
+            continue
+        if op.name == "barrier":
+            continue
+        if channels:  # a gate after channels closes the previous noisy layer
+            flush()
+        gates.append(inst)
+    if channels:
+        flush()
+    else:  # trailing gates without noise: copied once, not folded
+        for inst in gates:
+            out.append(inst.operation, inst.qubits, inst.clbits)
+    return out
+
+
 def noise_locations(circuit: QuantumCircuit) -> int:
     """Number of single-qubit noise channels in ``circuit`` (``n d`` for layer noise)."""
     return sum(1 for inst in circuit.data if inst.operation.name == "pauli_channel")
@@ -194,10 +270,16 @@ def exact_noisy_state(circuit: QuantumCircuit, theta: FloatArray) -> ComplexArra
 
 @dataclass(frozen=True, slots=True)
 class _Op:
-    """A fused unitary on one or two qubits (tensor axes already resolved)."""
+    """A fused unitary on one or two qubits (tensor axes already resolved).
+
+    ``exchange`` holds ``(a, b)`` when ``matrix = a I + b SWAP`` (every exchange gate
+    ``exp(-i theta/2 (XX + YY + ZZ))`` is of this form); such ops are applied as a weighted sum
+    of the state and its qubit-swapped view, which is much cheaper than a general 4x4 product.
+    """
 
     qubits: tuple[int, ...]
     matrix: ComplexArray
+    exchange: tuple[complex, complex] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -261,13 +343,34 @@ class PauliTrajectorySimulator:
     state, so only erroneous trajectories cost a simulation, and they are propagated together
     as one batch.
 
+    Kernels: with ``fast=False`` (the default, used for every result produced before the
+    fast kernels existed) all gates go through one general 4x4 contraction and erroneous
+    trajectories are propagated as one large batch. ``fast=True`` applies exchange gates
+    ``a I + b SWAP`` as a weighted sum of the state and its qubit-swapped view, rotates
+    measurement bases with butterflies, and propagates trajectories in cache-sized chunks of
+    ``max_batch_amplitudes`` amplitudes: about 2x faster on 12 qubits. Both compute the same
+    states to ~1e-16, but sampling is not bitwise identical (a last-digit change of a
+    probability can change a multinomial draw and everything after it), so the choice is part
+    of a run's configuration (``logical_noise.fast_kernels``) and is recorded.
+
     Args:
         circuit: Parametrised circuit of 1- and 2-qubit gates and :class:`PauliChannel` s.
-        max_batch_amplitudes: Upper bound on ``trajectories * 2**n`` held at once.
+        max_batch_amplitudes: Upper bound on ``trajectories * 2**n`` held at once; ``None``
+            means ``2**25`` (reference) or ``2**15`` (fast).
+        fast: Use the fast kernels.
     """
 
-    def __init__(self, circuit: QuantumCircuit, *, max_batch_amplitudes: int = 2**25) -> None:
+    def __init__(
+        self,
+        circuit: QuantumCircuit,
+        *,
+        max_batch_amplitudes: int | None = None,
+        fast: bool = False,
+    ) -> None:
         """See class docstring."""
+        if max_batch_amplitudes is None:
+            max_batch_amplitudes = 2**15 if fast else 2**25
+        self._fast = fast
         self._circuit = circuit
         self._n = circuit.num_qubits
         self._dim = 2**self._n
@@ -368,13 +471,15 @@ class PauliTrajectorySimulator:
                         for v in op.params
                     ]
                 ops = _fuse(ops, qubits, np.asarray(gate.to_matrix(), dtype=complex))
-            bound.append(ops)
+            bound.append([_classify(op) for op in ops] if self._fast else ops)
         return bound
 
     # -- state evolution ------------------------------------------------------------------------
 
     def _apply(self, states: ComplexArray, op: _Op) -> ComplexArray:
         """Apply a 1- or 2-qubit unitary to a batch of states, shape ``(K, 2**n)``."""
+        if op.exchange is not None:
+            return _apply_exchange(states, op.exchange, op.qubits, self._n)
         return _apply_unitary(states, op.matrix, op.qubits, self._n)
 
     def _segment_states(self, ops: list[list[_Op]]) -> list[ComplexArray]:
@@ -514,11 +619,12 @@ class PauliTrajectorySimulator:
             ids, states = self._erroneous_states(ops, cache, traj, loc, pauli)
             counts = np.zeros(self._dim, dtype=np.int64)
             clean = shots - ids.size
+            probabilities = _basis_probabilities if self._fast else _basis_probabilities_reference
             if clean:
-                probs = _basis_probabilities(ideal[None, :], basis, self._n)[0]
+                probs = probabilities(ideal[None, :], basis, self._n)[0]
                 counts += rng.multinomial(clean, probs / probs.sum())
             if ids.size:
-                probs = _basis_probabilities(states, basis, self._n)
+                probs = probabilities(states, basis, self._n)
                 cumulative = np.cumsum(probs, axis=1)
                 u = rng.random(ids.size) * cumulative[:, -1]
                 outcomes = (cumulative < u[:, None]).sum(axis=1)
@@ -568,6 +674,33 @@ def _fuse(ops: list[_Op], qubits: tuple[int, ...], matrix: ComplexArray) -> list
     return ops
 
 
+_SWAP = np.eye(4, dtype=complex)[[0, 2, 1, 3]]
+
+
+def _classify(op: _Op) -> _Op:
+    """Recognise ``a I + b SWAP`` two-qubit ops (exchange gates and their products)."""
+    if len(op.qubits) != 2:
+        return op
+    m = op.matrix
+    a, b = complex(m[1, 1]), complex(m[1, 2])
+    if np.allclose(m, a * np.eye(4) + b * _SWAP, atol=1e-12):
+        return _Op(op.qubits, m, (a, b))
+    return op
+
+
+def _apply_exchange(
+    states: ComplexArray, coefficients: tuple[complex, complex], qubits: tuple[int, ...], n: int
+) -> ComplexArray:
+    """``(a I + b SWAP)`` on ``qubits`` of ``(K, 2**n)`` states."""
+    a, b = coefficients
+    k = states.shape[0]
+    lo, hi = sorted(qubits)
+    view = states.reshape(k * 2 ** (n - 1 - hi), 2, 2 ** (hi - lo - 1), 2, 2**lo)
+    out = a * view
+    out += b * view.transpose(0, 3, 2, 1, 4)
+    return out.reshape(k, -1)
+
+
 def _embed(matrix: ComplexArray, qubits: tuple[int, ...], target: tuple[int, ...]) -> ComplexArray:
     """Express a gate on ``qubits`` as a matrix on ``target`` (little-endian, qiskit order)."""
     if qubits == target:
@@ -611,13 +744,43 @@ _BASIS_CHANGE = {
 }
 
 
-def _basis_probabilities(states: ComplexArray, basis: str, n: int) -> FloatArray:
-    """Outcome probabilities after rotating each qubit into ``basis[q]``."""
+def _basis_probabilities_reference(states: ComplexArray, basis: str, n: int) -> FloatArray:
+    """Outcome probabilities after rotating each qubit into ``basis[q]`` (reference kernel)."""
     rotated = states
     for q, letter in enumerate(basis):
         if letter != "Z":
             rotated = _apply_unitary(rotated, _BASIS_CHANGE[letter], (q,), n)
     return np.asarray(np.abs(rotated) ** 2, dtype=float)
+
+
+def _basis_probabilities(states: ComplexArray, basis: str, n: int) -> FloatArray:
+    """Outcome probabilities after rotating each qubit into ``basis[q]`` (fast kernel).
+
+    ``X`` is a Hadamard, ``Y`` is ``H S^dag``. The ``S^dag`` phases of all ``Y`` qubits are one
+    diagonal, and every Hadamard is an in-place butterfly on one tensor axis; the ``2**(-m/2)``
+    normalisation of ``m`` Hadamards is applied once to the probabilities.
+    """
+    k = states.shape[0]
+    rotated = np.array(states, dtype=complex, copy=True)
+    y_mask = sum(1 << q for q, letter in enumerate(basis) if letter == "Y")
+    if y_mask:
+        outcomes = np.arange(2**n, dtype=np.int64)
+        weight = np.bitwise_count(outcomes & y_mask).astype(np.int64)
+        rotated *= (-1j) ** (weight % 4)
+    hadamards = 0
+    for q, letter in enumerate(basis):
+        if letter == "Z":
+            continue
+        hadamards += 1
+        view = rotated.reshape(k * 2 ** (n - 1 - q), 2, 2**q)
+        upper = view[:, 0, :].copy()
+        view[:, 0, :] += view[:, 1, :]
+        upper -= view[:, 1, :]
+        view[:, 1, :] = upper
+    probs = np.abs(rotated) ** 2
+    if hadamards:
+        probs /= 2.0**hadamards
+    return np.asarray(probs, dtype=float)
 
 
 def _expectations(states: ComplexArray, operator: spmatrix | ComplexArray) -> FloatArray:

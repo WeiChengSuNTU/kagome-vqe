@@ -40,6 +40,8 @@ __all__ = [
     "ZneEnergy",
     "choose_twin",
     "extrapolate",
+    "extrapolation_coefficients",
+    "zne_gradient_weights",
 ]
 
 log = logging.getLogger(__name__)
@@ -84,31 +86,104 @@ def extrapolate(
     return estimate, err
 
 
+def extrapolation_coefficients(
+    scales: Sequence[float], stds: FloatArray, method: Extrapolation
+) -> FloatArray:
+    """Coefficients ``c`` of a polynomial fit's zero-noise value ``sum_i c_i y_i``.
+
+    ``method`` is ``linear``, ``quadratic`` or ``richardson`` (for ``exponential`` the same
+    coefficients act on ``log|y|``). Weighted by ``1/std`` when every std is positive.
+    """
+    x = np.asarray(scales, dtype=float)
+    s = np.asarray(stds, dtype=float)
+    weights = 1.0 / s if np.all(s > 0) else np.ones_like(s)
+    degree = {"linear": 1, "quadratic": 2, "richardson": len(x) - 1, "exponential": 1}[method]
+    if len(x) <= degree:
+        msg = f"{method} extrapolation needs more than {degree} scale factors"
+        raise ValueError(msg)
+    vander = np.vander(x, degree + 1, increasing=True) * weights[:, None]
+    return np.asarray(np.linalg.pinv(vander)[0] * weights, dtype=float)
+
+
+def zne_gradient_weights(
+    scales: Sequence[float], values: FloatArray, stds: FloatArray, method: Extrapolation
+) -> FloatArray:
+    """``w_i = dE_ZNE / dE_i``: the zero-noise gradient is ``sum_i w_i g_i``.
+
+    ``g_i`` is the gradient measured at noise scale ``i``. For the polynomial fits the
+    extrapolated value is linear in the ``E_i``, so ``w`` are the fit coefficients (with the fit
+    weights frozen at their current values) and the result equals extrapolating every gradient
+    component. For ``exponential`` (``E_ZNE = sign exp(sum_i c_i log|E_i|)``) the chain rule
+    gives ``w_i = E_ZNE c_i / E_i``; it falls back to the linear weights where
+    :func:`extrapolate` would.
+    """
+    y = np.asarray(values, dtype=float)
+    s = np.asarray(stds, dtype=float)
+    if method == "exponential":
+        if not (np.all(y < 0) or np.all(y > 0)):
+            return extrapolation_coefficients(scales, s, "linear")
+        c = extrapolation_coefficients(scales, s / np.abs(y), "exponential")
+        estimate = float(np.sign(y[0])) * float(np.exp(c @ np.log(np.abs(y))))
+        return np.asarray(estimate * c / y, dtype=float)
+    return extrapolation_coefficients(scales, s, method)
+
+
 class ZneEnergy:
-    """Zero-noise extrapolation over locally folded copies of the circuit.
+    """Zero-noise extrapolation over noise-amplified copies of the circuit.
+
+    By default the copies are locally folded (every two-qubit gate ``G -> G (G^dag G)^k``),
+    the method used on compiled circuits. ``scale_circuit`` replaces the amplification, e.g.
+    :func:`kagome_vqe.noise.scale_noise_probability` or :func:`kagome_vqe.noise.
+    fold_noise_layers` for PRB 106 layer noise. Every :meth:`evaluate` also returns the raw
+    per-scale energies in :attr:`EnergyBatch.scales`, so gradients and trajectory records can
+    use them.
 
     Args:
         problem: ISA problem at noise scale 1.
-        make_inner: Builds the estimator for one (folded) problem.
-        scales: Odd noise-scale factors, starting with 1.
+        make_inner: Builds the estimator for one (amplified) problem.
+        scales: Noise-scale factors, starting with 1.
         extrapolation: Fit model, see :func:`extrapolate`.
+        scale_circuit: ``(circuit, factor) -> amplified circuit``; default local gate folding.
+        make_inner_at: Like ``make_inner`` but also given the scale index (for independent
+            seeds per scale); overrides ``make_inner`` when set.
+        noise_scaling: Name of the amplification, for the description.
     """
 
     def __init__(
         self,
         problem: IsaProblem,
         make_inner: Callable[[IsaProblem], EnergyEstimator],
-        scales: Sequence[int] = (1, 3, 5),
+        scales: Sequence[float] = (1, 3, 5),
         extrapolation: Extrapolation = "exponential",
+        *,
+        scale_circuit: Callable[[QuantumCircuit, float], QuantumCircuit] | None = None,
+        make_inner_at: Callable[[IsaProblem, int], EnergyEstimator] | None = None,
+        noise_scaling: str = "gate_folding",
     ) -> None:
-        """Fold the circuit once per scale factor and build the inner estimators."""
-        self._scales = tuple(int(s) for s in scales)
+        """Amplify the circuit once per scale factor and build the inner estimators."""
+        if scale_circuit is None:
+            self._scales: tuple[float, ...] = tuple(int(s) for s in scales)
+
+            def fold(circuit: QuantumCircuit, factor: float) -> QuantumCircuit:
+                return fold_two_qubit_gates(circuit, int(factor))
+
+            scale_circuit = fold
+        else:
+            self._scales = tuple(float(s) for s in scales)
         self._method: Extrapolation = extrapolation
+        self._noise_scaling = noise_scaling
         self._inners = [
-            make_inner(problem.with_circuit(fold_two_qubit_gates(problem.circuit, s)))
-            for s in self._scales
+            make_inner_at(problem.with_circuit(scale_circuit(problem.circuit, s)), i)
+            if make_inner_at is not None
+            else make_inner(problem.with_circuit(scale_circuit(problem.circuit, s)))
+            for i, s in enumerate(self._scales)
         ]
         self._stack: contextlib.ExitStack | None = None
+
+    @property
+    def scales(self) -> tuple[float, ...]:
+        """Noise-scale factors."""
+        return self._scales
 
     @property
     def description(self) -> dict[str, Any]:
@@ -117,6 +192,7 @@ class ZneEnergy:
             "kind": "zne",
             "scales": list(self._scales),
             "extrapolation": self._method,
+            "noise_scaling": self._noise_scaling,
             "inner": self._inners[0].description,
         }
 
@@ -156,6 +232,12 @@ class ZneEnergy:
             shots=batches[0].shots,
             job_id=batches[0].job_id,
             wall_time_s=sum(b.wall_time_s for b in batches),
+            scales={
+                "scales": list(self._scales),
+                "energies": values,
+                "stds": stds,
+                "extrapolation": self._method,
+            },
         )
 
 

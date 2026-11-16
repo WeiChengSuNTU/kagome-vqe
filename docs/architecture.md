@@ -65,6 +65,7 @@ ever overwritten):
 | `params.npy` | on success, if `record_params` | parameters of every evaluation, shape `(nfev, n)` |
 | `ideal_trace.csv` | on success, if tracked | noise-free energy of the iterate after every iteration, with evaluations and shots spent so far and the step norm |
 | `iterates.npy` | on success, if `record_params` | the optimiser's parameters after every iteration, row 0 = `x0`, shape `(nit + 1, n)` |
+| `trajectory.npz` | on success, gradient descent with `optimizer.measure_current` | per iteration: `theta_t`, cost per noise scale, per-scale and used gradients, ZNE weights, cumulative cost, noise-free energy / gradient (schema in [`experiments/graph_hva_mitigation.md`](experiments/graph_hva_mitigation.md)) |
 | `partial_trace.csv` | on failure | the evaluations completed before the failure |
 
 `result.json` (schema version 2) holds:
@@ -167,6 +168,17 @@ Two noise modes are kept apart on purpose (details and validation in
 re-optimising (exact and trajectory estimates, PRB 106 Eq. 9) and can add an `aer_noisy`
 comparison for the same parameters.
 
+**Mitigation on paper-layer noise** ([`experiments/graph_hva_mitigation.md`](experiments/graph_hva_mitigation.md)):
+`ZneEnergy` (in `mitigation/wrappers.py`) accepts a noise amplification; for `logical_noise`
+it is `noise.scale_noise_probability` (`p_e -> lambda p_e`) or `noise.fold_noise_layers`
+(`L -> L (L^dag L)^k`), one independently seeded `LogicalNoiseEnergy` per scale, and every
+batch carries its per-scale energies. `ParameterShift` (exchange-gate rule for `graph_hva`)
+turns those into the gradient of the extrapolated cost (`zne_gradient_weights`), and
+`GradientDescent` records every iteration, which `run_vqe` saves as `trajectory.npz`.
+`zne_analysis.py` characterises the ZNE methods on saved parameters with exact density
+matrices; `trajectory_analysis.py` scores recorded gradients against the exact noise-free
+gradient.
+
 ## 6. Command line
 
 | command | purpose |
@@ -181,6 +193,8 @@ comparison for the same parameters.
 | `kagome-vqe study-summary DIR` | regenerate a study's tables, report and figures |
 | `kagome-vqe noise-analysis C [--dry-run]` | fixed-parameter noise analysis of saved runs (`configs/noise/`) |
 | `kagome-vqe noise-summary DIR` | regenerate a noise analysis's report and figures |
+| `kagome-vqe zne-analysis C [--dry-run] [--workers N]` | fixed-parameter ZNE characterisation of saved runs (`configs/mitigation/`) |
+| `kagome-vqe zne-summary DIR` | regenerate a ZNE analysis's report and figures |
 | `kagome-vqe map C [-b ...]` | compile-only comparison of mapping strategies |
 | `kagome-vqe plot DIR... [--kind ideal]` | convergence or noise-free-error-versus-shots figures |
 | `kagome-vqe backends [--ibm]` | list fake (and IBM) backends |

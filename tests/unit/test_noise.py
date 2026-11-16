@@ -239,10 +239,7 @@ def test_logical_noise_config_round_trips_through_toml() -> None:
         ({"ansatz": {"type": "hva", "reps": 1}}, "graph_hva"),
         ({"mapping": {"strategy": "prb105"}}, "not routed"),
         ({"mitigation": {"readout": True}}, "mitigation"),
-        (
-            {"optimizer": {"type": "adam", "gradient": "parameter_shift", "maxiter": 2}},
-            "parameter_shift",
-        ),
+        ({"mitigation": {"zne": {"scales": [1, 3]}}}, "layer_folding"),
     ],
 )
 def test_logical_noise_rejects_incompatible_settings(

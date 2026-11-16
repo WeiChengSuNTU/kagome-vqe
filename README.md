@@ -177,7 +177,7 @@ descent obtain their gradient:
 | `type = "adam"`, `gradient = "forward"` | n + 1 | the paper's ADAM; `fd_eps` must be ~0.1 under shot noise |
 | `type = "adam"`, `gradient = "central"` | 2n + 1 | less bias than forward differences |
 | `type = "adam"`, `gradient = "spsa"` | 2 | SPSA-ADAM hybrid |
-| `type = "adam"`, `gradient = "parameter_shift"` | 2K | exact up to shot noise; K = 36 for HVA, 12 for RVB |
+| `type = "adam"`, `gradient = "parameter_shift"` | 2K | exact up to shot noise; K = 36 for HVA, 12 for RVB; for `graph_hva` K = number of exchange gates (shift `pi/4`) |
 | `type = "gd"` | as for its gradient | plain gradient descent, a control for comparing gradients |
 | `type = "scipy"` | method dependent | COBYLA, Powell, ...; one energy per call, no batching |
 
@@ -212,6 +212,11 @@ rescale = { twin = "auto" }   # divide out the damping measured on a classically
 - **ZNE** multiplies the cost per energy by the number of scale factors.
 - **Twin rescaling** measures its twin once per run. The automatic twin needs a classical
   simulation, which is fine up to about 20 qubits.
+- On `logical_noise` (PRB 106 layer noise) only ZNE applies, with `noise_scaling =
+  "probability"` (`p_e -> lambda p_e`) or `"layer_folding"` (each noisy layer `L -> L (L^dag
+  L)^k`). With a parameter-shift gradient and `optimizer.measure_current = true` the gradient is
+  that of the extrapolated cost, and every iteration is recorded in `trajectory.npz`; see
+  [`docs/experiments/graph_hva_mitigation.md`](docs/experiments/graph_hva_mitigation.md).
 
 Every technique works on Aer and through the IBM Quantum sampler. To measure what a stack
 reports at a state whose energy is known, evaluate at fixed parameters instead of optimising:
@@ -232,6 +237,7 @@ commands, interpretation, limitations):
 | [`docs/experiments/graph_hva_optimizers.md`](docs/experiments/graph_hva_optimizers.md) | L-BFGS-B vs calibrated SPSA vs ADAM + SPSA gradient for `graph_hva`, noiseless and finite-shot, equal budgets | smoke and limited comparison completed; full profile configured, not yet run |
 | [`docs/experiments/graph_hva_noise.md`](docs/experiments/graph_hva_noise.md) | PRB 106 noise models and the fixed-parameter noise analysis (noise-free optima under local depolarising / bit-flip noise, Eq. 9 check), compiled-hardware noise kept separate | reproduction of the PRB 106 methodology on the 2x6 rectangle completed |
 | [`docs/experiments/graph_hva_noisy_optimizers.md`](docs/experiments/graph_hva_noisy_optimizers.md) | calibrated SPSA (with and without step control) vs ADAM + SPSA gradient under paper-layer noise, equal shot budgets, noise-free parameter quality, transfer of noise-free optima | new (not in PRB 106); smoke, pilot and limited comparison completed; full profile configured, not yet run |
+| [`docs/experiments/graph_hva_mitigation.md`](docs/experiments/graph_hva_mitigation.md) | ZNE on paper-layer noise (probability scaling, layer folding): fixed-parameter bias / variance / rmse from exact density matrices; parameter-shift gradient descent with and without ZNE; trajectory records for surrogate models | fixed-parameter characterisation and limited GD comparison completed |
 | [`docs/hardware.md`](docs/hardware.md) | compile-only mapping benchmarks on IBM Nighthawk and Heron | completed |
 | [`docs/roadmap.md`](docs/roadmap.md) | diagnosis of the noisy-energy gap and the milestone plan | living |
 
@@ -252,8 +258,8 @@ cancelling.
 * Optimiser conclusions for `graph_hva` so far rest on limited 12-site comparisons (three
   seeds); the full multi-seed studies, noise-free and noisy, are configured but not run.
 * Physical noise for `graph_hva` is the PRB 106 logical-layer model (`logical_noise`) or a fake
-  backend's model on the compiled circuit (`aer_noisy`); no error mitigation has been applied
-  to `graph_hva` yet, and nothing has run on IBM hardware.
+  backend's model on the compiled circuit (`aer_noisy`). Error mitigation for `graph_hva` so far
+  is ZNE on the logical-layer model only; nothing has run on IBM hardware.
 
 ## Physics notes
 

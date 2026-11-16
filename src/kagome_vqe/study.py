@@ -48,11 +48,13 @@ import pandas as pd
 import tomli_w
 from pydantic import Field, field_validator, model_validator
 
+from kagome_vqe.ansatz.unshare import unshare_parameters
 from kagome_vqe.config import (
     AnsatzConfig,
     BackendConfig,
     BudgetConfig,
     LatticeConfig,
+    MitigationConfig,
     OptimizerConfig,
     RunConfig,
     _Frozen,
@@ -97,14 +99,18 @@ class StudyBackend(_Frozen):
     """One evaluation backend with its resource budget.
 
     Attributes:
-        label: Short name (``sv``, ``shots1024``).
+        label: Short name (``sv``, ``shots1024``, ``dep0.001_zne``).
         backend: Backend settings.
         budget: Limits applied identically to every optimiser on this backend.
+        mitigation: Error mitigation applied to every energy on this backend (part of the
+            evaluation pipeline, so a mitigated and an unmitigated pipeline are two backend
+            entries). Shot budgets count every noise scale.
     """
 
     label: Annotated[str, Field(pattern=_LABEL)]
     backend: BackendConfig
     budget: BudgetConfig = BudgetConfig()
+    mitigation: MitigationConfig = MitigationConfig()
 
 
 class StudyOptimizer(_Frozen):
@@ -176,6 +182,8 @@ class StudyConfig(_Frozen):
         record_params: Save every evaluated parameter vector (``params.npy``).
         track_ideal_energy: Record the noise-free energy after every iteration (needed for
             the error-versus-cost figures).
+        track_ideal_gradient: For gradient-trajectory runs (``optimizer.measure_current``),
+            also record the exact noise-free gradient at every iterate.
     """
 
     name: Annotated[str, Field(pattern=_LABEL.replace("_.", "_.-"))] = "study"
@@ -194,6 +202,7 @@ class StudyConfig(_Frozen):
     success_threshold: Annotated[float, Field(gt=0)] = 0.01
     record_params: bool = True
     track_ideal_energy: bool = True
+    track_ideal_gradient: bool = False
 
     @field_validator("ansatz")
     @classmethod
@@ -238,7 +247,11 @@ class StudyConfig(_Frozen):
                     ansatz = self.ansatz.model_copy(
                         update={"reps": reps, "include_h0": h0, "schedule": lat.schedule}
                     )
-                    num_parameters = ansatz.build(lat.lattice.build()).num_parameters
+                    built = ansatz.build(lat.lattice.build())
+                    num_parameters = built.num_parameters
+                    num_occurrences = unshare_parameters(built.build(), exchange_gates=True)[
+                        1
+                    ].num_occurrences
                     for back in self.backends:
                         for seed in self.seeds:
                             for opt in self.optimizers:
@@ -247,7 +260,11 @@ class StudyConfig(_Frozen):
                                 optimizer = opt.optimizer
                                 if opt.fit_maxiter_to_budget:
                                     fitted = fitted_maxiter(
-                                        optimizer, back, lat.lattice, num_parameters
+                                        optimizer,
+                                        back,
+                                        lat.lattice,
+                                        num_parameters,
+                                        num_occurrences=num_occurrences,
                                     )
                                     if fitted is not None:
                                         optimizer = optimizer.model_copy(update={"maxiter": fitted})
@@ -267,6 +284,9 @@ class StudyConfig(_Frozen):
                                     budget=back.budget,
                                     record_params=self.record_params,
                                     track_ideal_energy=self.track_ideal_energy,
+                                    mitigation=back.mitigation,
+                                    track_ideal_gradient=self.track_ideal_gradient
+                                    and optimizer.measure_current,
                                 )
                                 out.append(
                                     StudyRun(
@@ -295,8 +315,9 @@ def load_study_config(path: Path) -> StudyConfig:
 def evaluation_budget(backend: StudyBackend, lattice: LatticeConfig) -> int | None:
     """Energy evaluations the backend's budget allows (the tighter of its two limits).
 
-    A shot limit converts at ``shots * measurement_groups`` per evaluation (no mitigation in
-    studies), with the groups counted on the lattice's Hamiltonian.
+    A shot limit converts at ``shots * measurement_groups * noise scales`` per evaluation,
+    with the groups counted on the lattice's Hamiltonian (readout calibration and twin
+    measurements, not used in studies, are not included).
     """
     limits: list[int] = []
     if backend.budget.max_evaluations is not None:
@@ -304,7 +325,9 @@ def evaluation_budget(backend: StudyBackend, lattice: LatticeConfig) -> int | No
     if backend.budget.max_shots is not None and backend.backend.shots:
         hamiltonian = heisenberg_hamiltonian(lattice.build())
         groups = len(hamiltonian.group_commuting(qubit_wise=True))
-        limits.append(backend.budget.max_shots // (backend.backend.shots * groups))
+        zne = backend.mitigation.zne
+        scales = len(zne.scales) if zne is not None else 1
+        limits.append(backend.budget.max_shots // (backend.backend.shots * groups * scales))
     return min(limits) if limits else None
 
 
@@ -313,12 +336,15 @@ def fitted_maxiter(
     backend: StudyBackend,
     lattice: LatticeConfig,
     num_parameters: int,
+    *,
+    num_occurrences: int | None = None,
 ) -> int | None:
     """``maxiter`` that spends exactly the evaluation budget, for fixed-cost optimisers.
 
     * calibrated or plain SPSA: ``(E - calibration - 1) // 2`` (two per iteration, one final);
     * ADAM / GD: ``(E - 1) // k`` with ``k`` the gradient's energies per iteration
-      (2 for SPSA, ``n + 1`` forward, ``2n + 1`` central);
+      (2 for SPSA, ``n + 1`` forward, ``2n + 1`` central, ``2K`` parameter shift over ``K``
+      gate occurrences, plus one with ``measure_current``);
     * scipy: ``None`` (variable cost; the budget guard stops it).
     """
     budget = evaluation_budget(backend, lattice)
@@ -332,6 +358,9 @@ def fitted_maxiter(
             "spsa": 2,
             "forward": num_parameters + 1,
             "central": 2 * num_parameters + 1,
+            "parameter_shift": None
+            if num_occurrences is None
+            else 2 * num_occurrences + int(optimizer.measure_current),
         }.get(optimizer.gradient)
         if per_iteration is None:
             return None
@@ -470,8 +499,9 @@ def estimate_study(
     """Plan and cost estimate without optimising: runs, evaluation budgets, time per run.
 
     Time per evaluation is measured by evaluating ``probe_evaluations`` random points once
-    per (lattice, p, H0, backend); the run time estimate is that times the budget (or, without
-    a budget, ``maxiter`` times the cost per iteration where it is known). Real runs also
+    per (lattice, p, H0, backend), through the backend's mitigation; the run time estimate is
+    that times the budget (or, without a budget, ``maxiter`` times the cost per iteration where
+    it is known). Real runs also
     spend time on noise-free tracking and stop early when an optimiser converges.
     """
     from kagome_vqe.estimators import make_estimator
@@ -486,7 +516,11 @@ def estimate_study(
             rng = np.random.default_rng(0)
             points = rng.random((probe_evaluations, prep.parameter_map.num_occurrences))
             with make_estimator(
-                cell.config.backend, prep.problem, prep.backend, seed=0
+                cell.config.backend,
+                prep.problem,
+                prep.backend,
+                seed=0,
+                mitigation=cell.config.mitigation,
             ) as estimator:
                 estimator.evaluate(points[:1])  # warm-up (compilation caches)
                 tick = time.perf_counter()
@@ -499,6 +533,8 @@ def estimate_study(
         if budget is None and prep.projected_evaluations is not None:
             budget = prep.projected_evaluations
         groups = prep.problem.measurement_groups
+        zne = cell.config.mitigation.zne
+        groups *= len(zne.scales) if zne is not None else 1
         shots = cell.config.backend.shots
         rows.append(
             {
@@ -565,6 +601,10 @@ def _run_row(labels: dict[str, Any], run: Any, threshold: float) -> dict[str, An
         "ideal_relative_error": ideal_err,
         "fidelity": res.get("ideal_fidelity"),
         "noise": run.metadata.get("noise", {}).get("mode", "none"),
+        "mitigation": run.config.mitigation.label(),
+        "final_unmitigated_energy": (run.metadata.get("final_zne") or {}).get(
+            "unmitigated_energy", math.nan
+        ),
         "measured_minus_ideal": res["final_energy"] - ideal if ideal is not None else math.nan,
         "initial_relative_error": start,
         "peak_relative_error": peak,
@@ -780,4 +820,9 @@ def summarise_study(study_dir: Path) -> Path:
     figures = [] if runs.empty else plot_study_figures(study_dir, runs, out / "figures")
     report = out / "report.md"
     report.write_text(_markdown_report(cfg, runs, groups, figures))
+    from kagome_vqe.trajectory_analysis import load_study_trajectories, summarise_trajectories
+
+    trajectories = load_study_trajectories(study_dir)
+    if trajectories:  # gradient-descent runs with measure_current
+        summarise_trajectories(trajectories, out, title=f"{study_dir.name}: gradient trajectories")
     return report

@@ -9,7 +9,9 @@ Experiments with these tools are written up separately: the L-BFGS-B depth sweep
 comparison in [`experiments/graph_hva_optimizers.md`](experiments/graph_hva_optimizers.md),
 PRB 106 noise models and the fixed-parameter noise analysis in
 [`experiments/graph_hva_noise.md`](experiments/graph_hva_noise.md), noisy optimisation in
-[`experiments/graph_hva_noisy_optimizers.md`](experiments/graph_hva_noisy_optimizers.md)
+[`experiments/graph_hva_noisy_optimizers.md`](experiments/graph_hva_noisy_optimizers.md),
+error mitigation (ZNE, parameter-shift gradient descent) in
+[`experiments/graph_hva_mitigation.md`](experiments/graph_hva_mitigation.md)
 and the compile-only mapping benchmarks in [`hardware.md`](hardware.md).
 
 References (PDFs in `references/KagomeHVA/`):

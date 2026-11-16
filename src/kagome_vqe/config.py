@@ -417,6 +417,11 @@ class OptimizerConfig(_Frozen):
             norm exceeds this value to that norm. ``None`` (default) leaves SPSA unchanged.
         clip_update: SPSA only, optional step control: clip each component of the update to
             ``[-clip_update, clip_update]``. ``None`` (default) leaves SPSA unchanged.
+        measure_current: ``gd``/``adam`` with ``gradient = "parameter_shift"`` only: also
+            measure the current point in every gradient batch (one extra energy per
+            iteration), so the run's trajectory records ``C(theta_t)`` next to
+            ``g(theta_t)``. Required for a zero-noise-extrapolated gradient (the chain-rule
+            weights need the energies at the current point).
     """
 
     type: Literal["adam", "gd", "spsa", "scipy"] = "adam"
@@ -439,11 +444,15 @@ class OptimizerConfig(_Frozen):
     options: dict[str, float | int | bool | str] = Field(default_factory=dict)
     max_step_norm: Annotated[float, Field(gt=0)] | None = None
     clip_update: Annotated[float, Field(gt=0)] | None = None
+    measure_current: bool = False
 
     @model_validator(mode="after")
     def _step_control_is_spsa(self) -> Self:
         if self.type != "spsa" and (self.max_step_norm is not None or self.clip_update is not None):
             msg = "optimizer.max_step_norm / clip_update only apply to type = 'spsa'"
+            raise ValueError(msg)
+        if self.measure_current and not self.uses_parameter_shift:
+            msg = "optimizer.measure_current needs type 'gd' or 'adam' with parameter_shift"
             raise ValueError(msg)
         return self
 
@@ -477,6 +486,7 @@ class OptimizerConfig(_Frozen):
                 perturbation=self.perturbation,
                 rng=rng,
                 parameter_map=parameter_map,
+                include_value=self.measure_current,
             )
             if self.type == "gd":
                 return GradientDescent(maxiter=self.maxiter, lr=self.lr, gradient=gradient)
@@ -522,7 +532,8 @@ class OptimizerConfig(_Frozen):
                 "forward": f"forward difference (step {self.fd_eps:g}), n + 1 energies",
                 "central": f"central difference (step {self.fd_eps:g}), 2n + 1 energies",
                 "spsa": f"simultaneous perturbation (c = {self.perturbation:g}), 2 energies",
-                "parameter_shift": "parameter shift, 2 energies per gate occurrence",
+                "parameter_shift": "parameter shift, 2 energies per gate occurrence"
+                + (" plus the current point" if self.measure_current else ""),
             }[self.gradient]
             return f"{self.gradient}: {detail}"
         if self.type == "spsa":
@@ -560,12 +571,24 @@ class LogicalNoiseConfig(_Frozen):
         engine: ``"trajectories"`` (Pauli-error sampling per shot; only shots with an error are
             simulated) or ``"aer"`` (the same circuit on Aer, density matrices up to 12
             qubits). Both sample measurement outcomes shot by shot.
+        fast_kernels: ``trajectories`` only: use the fast simulation kernels (exchange gates as
+            ``a I + b SWAP``, cache-sized batches; about 2x faster). Same states to ~1e-16, but
+            not bitwise the same samples as the reference kernels, so the default ``False``
+            keeps every earlier run replayable bit for bit.
     """
 
     channel: Literal["depolarizing", "bit_flip"] = "depolarizing"
     probability: Annotated[float, Field(ge=0, le=1)] = 1e-3
     placement: Literal["paper_layers"] = "paper_layers"
     engine: Literal["trajectories", "aer"] = "trajectories"
+    fast_kernels: bool = False
+
+    @model_validator(mode="after")
+    def _fast_is_trajectories(self) -> Self:
+        if self.fast_kernels and self.engine != "trajectories":
+            msg = "logical_noise.fast_kernels applies to engine = 'trajectories' only"
+            raise ValueError(msg)
+        return self
 
     def label(self) -> str:
         """``"depolarizing p=0.001"``."""
@@ -664,25 +687,64 @@ class BackendConfig(_Frozen):
         return base if self.noise == "full" else f"{base}[{self.noise} noise]"
 
 
+ZneScaling = Literal["gate_folding", "probability", "layer_folding"]
+
+
+def _default_zne_scales() -> list[int | float]:
+    return [1, 3, 5]
+
+
 class ZneConfig(_Frozen):
     """Zero-noise extrapolation settings.
 
     Attributes:
-        scales: Odd noise-scale factors; each two-qubit gate is applied that many times.
+        scales: Noise-scale factors ``lambda`` (at least two, distinct, the first 1).
+            Odd integers for the folding methods; any values ``>= 1`` for ``probability``.
         extrapolation: ``"exponential"`` (matches multiplicative damping), ``"linear"``,
             ``"quadratic"`` or ``"richardson"``.
+        noise_scaling: How the noise is amplified.
+
+            ``"gate_folding"`` (default, compiled circuits on Aer/fake/IBM): every two-qubit
+            gate ``G`` becomes ``G (G^dag G)^k``, ``lambda = 2k + 1``.
+
+            ``"probability"`` (``logical_noise`` only): every PRB 106 noise location gets
+            error probability ``lambda p_e``; the circuit is unchanged. The simulation
+            analogue of pulse stretching: exact amplification of this noise model, not
+            something a gate-model device can do directly.
+
+            ``"layer_folding"`` (``logical_noise`` only): every noisy layer ``L`` (the singlet
+            preparation and each exchange layer, each followed by its noise) becomes ``L
+            (L^dag L)^k`` with the noise after each of the ``2k + 1`` copies, so the number of
+            noise locations is multiplied by ``lambda = 2k + 1``. The digital analogue that a
+            device could run (the circuit becomes ``lambda`` times deeper).
     """
 
-    scales: list[Annotated[int, Field(ge=1)]] = Field(default_factory=lambda: [1, 3, 5])
+    scales: list[Annotated[int, Field(ge=1)] | Annotated[float, Field(ge=1)]] = Field(
+        default_factory=_default_zne_scales
+    )
     extrapolation: Literal["linear", "quadratic", "richardson", "exponential"] = "exponential"
+    noise_scaling: ZneScaling = "gate_folding"
 
-    @field_validator("scales")
-    @classmethod
-    def _odd_scales(cls, value: list[int]) -> list[int]:
-        if len(value) < 2 or any(s % 2 == 0 for s in value):
-            msg = "zne.scales needs at least two odd integers"
+    @model_validator(mode="after")
+    def _valid_scales(self) -> Self:
+        values = [float(s) for s in self.scales]
+        if len(values) < 2 or len(set(values)) != len(values):
+            msg = "zne.scales needs at least two distinct values"
             raise ValueError(msg)
-        return value
+        if values[0] != 1:
+            msg = "zne.scales must start with 1 (the unamplified circuit, reported as unmitigated)"
+            raise ValueError(msg)
+        if self.noise_scaling != "probability" and any(
+            not float(s).is_integer() or int(s) % 2 == 0 for s in values
+        ):
+            msg = f"zne.scales must be odd integers for noise_scaling = {self.noise_scaling!r}"
+            raise ValueError(msg)
+        return self
+
+    def label(self) -> str:
+        """``"zne[probability 1,2,3 linear]"``."""
+        scales = ",".join(f"{float(s):g}" for s in self.scales)
+        return f"zne[{self.noise_scaling} {scales} {self.extrapolation}]"
 
 
 class RescaleConfig(_Frozen):
@@ -787,6 +849,9 @@ class RunConfig(_Frozen):
         mitigation: Error mitigation, see :class:`MitigationConfig`.
         mapping: Hardware mapping, see :class:`MappingConfig`.
         budget: Resource limits, see :class:`BudgetConfig`.
+        track_ideal_gradient: With a gradient trajectory (``optimizer.measure_current``), also
+            compute the exact noise-free gradient at every iterate (classical statevector
+            bookkeeping, timed separately) so estimated gradients can be scored against it.
     """
 
     name: str = "run"
@@ -802,6 +867,7 @@ class RunConfig(_Frozen):
     mitigation: MitigationConfig = MitigationConfig()
     mapping: MappingConfig = MappingConfig()
     budget: BudgetConfig = BudgetConfig()
+    track_ideal_gradient: bool = False
 
     @model_validator(mode="after")
     def _mitigation_fits(self) -> Self:
@@ -817,19 +883,50 @@ class RunConfig(_Frozen):
         if self.budget.max_shots is not None and self.backend.is_exact:
             msg = "budget.max_shots needs a shot-based backend; use budget.max_evaluations"
             raise ValueError(msg)
+        return self
+
+    @model_validator(mode="after")
+    def _logical_noise_fits(self) -> Self:
+        zne = self.mitigation.zne
         if self.backend.kind == "logical_noise":
             problems = []
             if self.ansatz.type != "graph_hva":
                 problems.append("ansatz.type = 'graph_hva' (noise locations are its layers)")
             if self.mapping.strategy != "generic":
                 problems.append("mapping.strategy = 'generic' (the logical circuit is not routed)")
-            if self.optimizer.uses_parameter_shift:
-                problems.append("a gradient other than parameter_shift")
-            if self.mitigation.enabled:
-                problems.append("no mitigation (not supported on logical noise yet)")
+            m = self.mitigation
+            if m.readout or m.symmetry or m.rescale is not None:
+                problems.append(
+                    "no readout, symmetry or twin mitigation (only ZNE is implemented on "
+                    "logical noise; the model has no readout error)"
+                )
+            if zne is not None and zne.noise_scaling == "gate_folding":
+                problems.append(
+                    "zne.noise_scaling = 'probability' or 'layer_folding' (folding single "
+                    "gates does not add PRB 106 layer noise)"
+                )
             if problems:
                 msg = "backend.kind='logical_noise' needs " + "; ".join(problems)
                 raise ValueError(msg)
+        elif zne is not None and zne.noise_scaling != "gate_folding":
+            msg = (
+                f"zne.noise_scaling = {zne.noise_scaling!r} acts on the PRB 106 noise "
+                "locations and needs backend.kind = 'logical_noise'"
+            )
+            raise ValueError(msg)
+        if (
+            zne is not None
+            and self.optimizer.uses_parameter_shift
+            and not (self.optimizer.measure_current)
+        ):
+            msg = (
+                "a parameter-shift gradient under ZNE needs optimizer.measure_current = true "
+                "(the extrapolated gradient uses the energies at the current point)"
+            )
+            raise ValueError(msg)
+        if self.track_ideal_gradient and not self.optimizer.measure_current:
+            msg = "track_ideal_gradient needs optimizer.measure_current (a gradient trajectory)"
+            raise ValueError(msg)
         return self
 
     @field_validator("name")

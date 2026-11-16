@@ -36,7 +36,7 @@ import time
 from collections.abc import Hashable, Mapping
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Annotated, Any, Self
+from typing import Annotated, Any, Protocol, Self
 
 import numpy as np
 import pandas as pd
@@ -157,7 +157,21 @@ def trajectories_for(cfg: NoiseAnalysisConfig, p: float, locations: int) -> int:
     return int(min(cfg.max_trajectories, max(cfg.min_trajectories, math.ceil(wanted))))
 
 
-def resolve_sources(cfg: NoiseAnalysisConfig) -> list[Path]:
+class SourceSelection(Protocol):
+    """Anything that names saved runs: ``runs`` patterns relative to ``root``."""
+
+    @property
+    def runs(self) -> list[str]:
+        """Run directories or glob patterns."""
+        ...
+
+    @property
+    def root(self) -> Path | None:
+        """Base directory for relative patterns."""
+        ...
+
+
+def resolve_sources(cfg: SourceSelection) -> list[Path]:
     """Run directories matched by ``cfg.runs`` that hold a completed ``result.json``."""
     base = Path.cwd() if cfg.root is None else Path(cfg.root)
     found: list[Path] = []
@@ -177,7 +191,7 @@ def _now() -> str:
     return datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
 
 
-def _new_dir(cfg: NoiseAnalysisConfig, root: Path) -> Path:
+def _new_dir(cfg: Any, root: Path) -> Path:
     base = Path(root) / f"{_now()}-{cfg.name}"
     out, counter = base, 1
     while out.exists():

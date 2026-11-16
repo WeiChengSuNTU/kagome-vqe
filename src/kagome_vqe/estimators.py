@@ -31,13 +31,16 @@ import time
 from dataclasses import dataclass
 from functools import cache
 from types import TracebackType
-from typing import Any, Literal, Protocol, Self, runtime_checkable
+from typing import TYPE_CHECKING, Any, Literal, Protocol, Self, runtime_checkable
 
 import numpy as np
 from numpy.typing import NDArray
 
 from kagome_vqe.config import BackendConfig, MitigationConfig, Settings
 from kagome_vqe.transpile import IsaProblem
+
+if TYPE_CHECKING:
+    from qiskit.circuit import QuantumCircuit
 
 __all__ = [
     "DENSITY_MATRIX_MAX_QUBITS",
@@ -79,6 +82,8 @@ class EnergyBatch:
         shots: Shots per measurement basis, if known.
         job_id: Runtime job id, if any.
         wall_time_s: Seconds spent in the primitive call (including queueing).
+        scales: For a zero-noise-extrapolated batch, the per-noise-scale raw energies before
+            extrapolation: ``{"scales", "energies" (L, k), "stds" (L, k), "extrapolation"}``.
     """
 
     energies: FloatArray
@@ -86,6 +91,7 @@ class EnergyBatch:
     shots: int | None = None
     job_id: str | None = None
     wall_time_s: float = 0.0
+    scales: dict[str, Any] | None = None
 
 
 @runtime_checkable
@@ -378,6 +384,7 @@ class LogicalNoiseEnergy:
         seed: int | None = None,
         aer_method: AerMethod = "auto",
         noise: dict[str, Any] | None = None,
+        fast_kernels: bool = False,
     ) -> None:
         """Create the estimator."""
         from kagome_vqe.noise import (
@@ -411,11 +418,12 @@ class LogicalNoiseEnergy:
                 method=method,
             )
         else:
-            self._simulator = PauliTrajectorySimulator(problem.circuit)
+            self._simulator = PauliTrajectorySimulator(problem.circuit, fast=fast_kernels)
             self._bases = measurement_bases(problem.observable)
         self._description = {
             "kind": "logical_noise",
             "engine": engine,
+            "fast_kernels": fast_kernels,
             "noise": noise,
             "noise_locations": noise_locations(problem.circuit),
             "shots": shots,
@@ -740,6 +748,7 @@ def _base_estimator(
             seed=seed,
             aer_method=cfg.aer_method,
             noise=cfg.logical_noise.model_dump(),
+            fast_kernels=cfg.logical_noise.fast_kernels,
         )
     if cfg.kind == "aer_noisy":
         return AerEnergy(
@@ -754,6 +763,11 @@ def _base_estimator(
         msg = f"backend.kind={cfg.kind!r} needs a backend object"
         raise ValueError(msg)
     return RuntimeEnergy(problem, backend, cfg, seed=seed)
+
+
+def _spawn_seed(seed: int, index: int) -> int:
+    """A seed for the ``index``-th sub-estimator, independent of the others."""
+    return int(np.random.SeedSequence([seed, index]).generate_state(1)[0])
 
 
 def make_estimator(
@@ -803,8 +817,31 @@ def make_estimator(
         return _base_estimator(cfg, prob, backend, seed)
 
     estimator: EnergyEstimator
-    if mitigation.zne is not None:
-        estimator = ZneEnergy(problem, inner, mitigation.zne.scales, mitigation.zne.extrapolation)
+    zne = mitigation.zne
+    if zne is not None and cfg.kind == "logical_noise":
+        from kagome_vqe.noise import fold_noise_layers, scale_noise_probability
+
+        def scaled(circuit: QuantumCircuit, factor: float) -> QuantumCircuit:
+            if zne.noise_scaling == "probability":
+                return scale_noise_probability(circuit, factor)
+            return fold_noise_layers(circuit, (round(factor) - 1) // 2)
+
+        def inner_at(prob: IsaProblem, index: int) -> EnergyEstimator:
+            # Independent randomness per noise scale, as separate hardware jobs would have.
+            scale_seed = None if seed is None else _spawn_seed(seed, index)
+            return _base_estimator(cfg, prob, backend, scale_seed)
+
+        estimator = ZneEnergy(
+            problem,
+            inner,
+            zne.scales,
+            zne.extrapolation,
+            scale_circuit=scaled,
+            make_inner_at=inner_at,
+            noise_scaling=zne.noise_scaling,
+        )
+    elif zne is not None:
+        estimator = ZneEnergy(problem, inner, zne.scales, zne.extrapolation)
     else:
         estimator = inner(problem)
     if mitigation.rescale is not None:

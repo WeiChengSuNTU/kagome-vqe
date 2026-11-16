@@ -1,0 +1,71 @@
+# Fixed-parameter ZNE characterisation under PRB 106 paper-layer noise (exact density matrices).
+# Noise-free L-BFGS-B optima of the PRB 105 2x6 rectangle, p = 1, 2 (seeds 1-3) and p = 3
+# (seed 1), the same sources as configs/noise/graph_hva_noise_fixed_prb106.toml. Nothing is
+# optimised: for every source and p_e the exact noisy energy at every noise scale is
+# extrapolated by each method; the report gives the remaining bias, the standard error at
+# 1024 shots per basis and scale, and the rmse.
+#
+#   uv run kagome-vqe zne-analysis configs/mitigation/graph_hva_zne_fixed.toml --dry-run
+#   uv run kagome-vqe zne-analysis configs/mitigation/graph_hva_zne_fixed.toml
+#
+# Cost: 5 density matrices per (source, p_e) (lambda = 1, 2, 3 by probability; 3, 5 by
+# folding), ~15 s each at p = 2 and ~45 / ~75 s for the folded ones (12 qubits, one thread):
+# about one hour for the 7 sources x 3 p_e.
+name = "graph_hva_zne_fixed"
+description = """
+ZNE on fixed noise-free optima (PRB 105 2x6 rectangle, graph_hva OPG without H0; p = 1, 2 seeds
+1-3, p = 3 seed 1) under paper-layer depolarising noise p_e = 1e-3, 3e-3, 1e-2. Methods:
+probability scaling lambda = 1, 2, 3 (linear, Richardson, exponential) and lambda = 1, 2 (linear);
+layer folding lambda = 1, 3 (linear) and 1, 3, 5 (Richardson, exponential). Standard errors for
+1024 shots per basis and noise scale.
+"""
+runs = [
+  "results/*-graph_hva_opt_repr/runs/*-graph_hva_opt_repr-bm2x6-p[12]-noh0-sv-lbfgsb-s[123]",
+  "results/*-graph_hva_noise_reference/runs/*-graph_hva_noise_reference-bm2x6-p3-noh0-sv-lbfgsb-s*",
+]
+channels = ["depolarizing"]
+probabilities = [1e-3, 3e-3, 1e-2]
+shots = 1024
+seed = 1
+
+[[methods]]
+label = "prob_lin_123"
+noise_scaling = "probability"
+scales = [1, 2, 3]
+extrapolation = "linear"
+
+[[methods]]
+label = "prob_rich_123"
+noise_scaling = "probability"
+scales = [1, 2, 3]
+extrapolation = "richardson"
+
+[[methods]]
+label = "prob_exp_123"
+noise_scaling = "probability"
+scales = [1, 2, 3]
+extrapolation = "exponential"
+
+[[methods]]
+label = "prob_lin_12"
+noise_scaling = "probability"
+scales = [1, 2]
+extrapolation = "linear"
+
+[[methods]]
+label = "fold_lin_13"
+noise_scaling = "layer_folding"
+scales = [1, 3]
+extrapolation = "linear"
+
+[[methods]]
+label = "fold_rich_135"
+noise_scaling = "layer_folding"
+scales = [1, 3, 5]
+extrapolation = "richardson"
+
+[[methods]]
+label = "fold_exp_135"
+noise_scaling = "layer_folding"
+scales = [1, 3, 5]
+extrapolation = "exponential"

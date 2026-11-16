@@ -8,6 +8,10 @@ A results directory ``results/<UTC timestamp>-<name>/`` contains::
     params.npy         parameters of every evaluation (optional, shape (nfev, n))
     ideal_trace.csv    noise-free energy after every iteration vs shots spent (optional)
     iterates.npy       the optimiser's parameters after every iteration, row 0 = x0 (optional)
+    trajectory.npz     gradient-descent record per iteration: theta_t, C(theta_t), per-noise-
+                       scale values and gradients, ZNE weights, resources (optional; see
+                       kagome_vqe.vqe.gradient_trajectory and docs/experiments/
+                       graph_hva_mitigation.md for the schema)
     environment.json   package versions, Python, platform, git commit
     run.log            the log of the run (attached by the CLI)
     status.json        "running", "completed" or "failed" (+ error); written by run_and_save
@@ -27,8 +31,8 @@ and ``metadata`` (the built lattice with every bond, boundary, dimers; ansatz st
 optimiser and the gradient estimator actually used; termination reason). Readers treat all
 of these as optional, so schema-1 directories keep loading. Later additions within schema 2
 (``iterates.npy``, ``step_norm`` in ``ideal_trace.csv``, ``metadata.noise``,
-``metadata.optimizer.hyperparameters`` / ``steps``, ``resources.circuit_executions``) are
-likewise optional for readers.
+``metadata.optimizer.hyperparameters`` / ``steps``, ``resources.circuit_executions``,
+``trajectory.npz``) are likewise optional for readers.
 """
 
 from __future__ import annotations
@@ -183,6 +187,8 @@ def save_run(result: VQERunResult, run_dir: Path) -> Path:
         )
     if result.iterates and result.config.record_params:
         np.save(run_dir / "iterates.npy", np.vstack(result.iterates))
+    if result.trajectory is not None:
+        np.savez(run_dir / "trajectory.npz", **result.trajectory)  # type: ignore[arg-type]
     if not (run_dir / "environment.json").exists():  # start_run wrote it at the start
         _write_json(run_dir / "environment.json", environment_info())
     partial = run_dir / "partial_trace.csv"
@@ -370,6 +376,7 @@ class LoadedRun:
     params: np.ndarray | None
     ideal_trace: pd.DataFrame | None = None
     iterates: np.ndarray | None = None
+    trajectory: dict[str, np.ndarray] | None = None
 
     @property
     def name(self) -> str:
@@ -455,6 +462,11 @@ def load_run(run_dir: Path) -> LoadedRun:
     ideal_path = run_dir / "ideal_trace.csv"
     ideal = pd.read_csv(ideal_path) if ideal_path.exists() else None
     iterates_path = run_dir / "iterates.npy"
+    trajectory_path = run_dir / "trajectory.npz"
+    trajectory = None
+    if trajectory_path.exists():
+        with np.load(trajectory_path) as data:
+            trajectory = {key: data[key] for key in data.files}
     return LoadedRun(
         path=run_dir,
         config=config,
@@ -463,6 +475,7 @@ def load_run(run_dir: Path) -> LoadedRun:
         params=params,
         ideal_trace=ideal,
         iterates=np.load(iterates_path) if iterates_path.exists() else None,
+        trajectory=trajectory,
     )
 
 

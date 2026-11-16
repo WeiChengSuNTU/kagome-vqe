@@ -7,6 +7,7 @@ estimators: with no moments, differences between runs come from the gradients al
 from __future__ import annotations
 
 from collections.abc import Callable
+from typing import Any
 
 import numpy as np
 
@@ -26,6 +27,10 @@ __all__ = ["GradientDescent"]
 class GradientDescent:
     """``x <- x - lr * g`` for a fixed number of iterations.
 
+    Every iteration is kept in :attr:`records` (the point, the gradient, the value if the
+    estimator measured it, cumulative evaluations and the estimator's ``details``), which is
+    the gradient trajectory :func:`kagome_vqe.vqe.run_vqe` persists.
+
     Args:
         maxiter: Iteration budget.
         lr: Step size.
@@ -42,11 +47,17 @@ class GradientDescent:
         self._maxiter = maxiter
         self._lr = lr
         self._gradient: GradientEstimator = gradient or ParameterShift()
+        self.records: list[dict[str, Any]] = []
 
     @property
     def name(self) -> str:
         """``"gd_<gradient>"``."""
         return f"gd_{self._gradient.name}"
+
+    @property
+    def learning_rate(self) -> float:
+        """Step size."""
+        return self._lr
 
     @property
     def maxiter(self) -> int:
@@ -69,11 +80,21 @@ class GradientDescent:
         x = np.array(x0, dtype=float)
         nfev = 0
         history: list[float] = []
+        self.records = []
         t = 0
         for t in range(1, self._maxiter + 1):
             est = self._gradient.estimate(fn, x)
             nfev += est.nfev
             history.append(np.nan if est.value is None else est.value)
+            self.records.append(
+                {
+                    "theta": x.copy(),
+                    "grad": np.array(est.grad, dtype=float),
+                    "value": est.value,
+                    "nfev": nfev,
+                    "details": est.details,
+                }
+            )
             x = x - self._lr * est.grad
             if callback is not None:
                 callback(IterationInfo(nit=t, x=x.copy(), fun=history[-1], nfev=nfev))
