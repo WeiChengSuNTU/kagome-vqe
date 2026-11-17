@@ -313,6 +313,25 @@ def noisy_input_mitigation(run: Any) -> Any:
     return mitigation
 
 
+def gradient_variances(traj: dict[str, np.ndarray], mapping: Any) -> np.ndarray:
+    """Shot-noise variance of every recorded parameter-shift gradient component, ``(T, n)``.
+
+    ``g_i = sum_lambda w_lambda sum_{k in i} c_k (E_lambda(phi + s_k) - E_lambda(phi - s_k))``,
+    so ``var g_i = 2 (sum_{k in i} c_k^2) sum_lambda w_lambda^2 sigma_lambda^2`` with
+    ``sigma_lambda`` the standard error of one energy at scale ``lambda``. The recorded standard
+    error at the current point stands in for that of the shifted energies (they lie within
+    ``pi/4`` of it and use the same shots). Without ZNE there is one scale with ``w = 1``.
+    """
+    c2 = np.asarray(mapping.occurrence_coefficients, dtype=float) ** 2
+    per_param = np.bincount(
+        mapping.occurrence_to_param, weights=c2, minlength=mapping.num_parameters
+    )
+    weights = np.asarray(traj["zne_weights"], dtype=float)
+    stds = np.asarray(traj["scale_stds"], dtype=float)
+    energy_var = np.sum(weights**2 * stds**2, axis=1)
+    return 2.0 * energy_var[:, None] * per_param[None, :]
+
+
 def _source_arrays(source: Path, t_init: int) -> tuple[Any, dict[str, np.ndarray]]:
     from kagome_vqe.results import load_run
 
@@ -359,6 +378,12 @@ class _PidnRun:
         self.gradients = traj["grad"][:t0].copy()
         self.steps = traj["theta_next"][:t0] - traj["theta"][:t0]
         self.train_rows = list(range(t0))
+        self.grad_var: np.ndarray | None = None
+        if variant.training.noise_aware:
+            self.grad_var = gradient_variances(traj, self.q.map)[:t0]
+            if not np.all(np.isfinite(self.grad_var)):
+                msg = f"{source}: Stage I has no standard errors for the noise-aware loss"
+                raise ValueError(msg)
         self.executions = int(traj["circuit_executions"][t0 - 1])
         self.shots = int(traj["shots"][t0 - 1])
         self.stage1 = {"executions": self.executions, "shots": self.shots}
@@ -400,6 +425,9 @@ class _PidnRun:
             gradients=_scatter_rows(self.gradients, self.train_rows, length),
             steps=_scatter_rows(self.steps, self.train_rows, length),
             rows=self.train_rows,
+            gradient_variances=None
+            if self.grad_var is None
+            else _scatter_rows(self.grad_var, self.train_rows, length),
         )
 
     def train(self) -> None:
@@ -463,6 +491,8 @@ class _PidnRun:
             self.train_rows.append(t)
             self.values = np.append(self.values, value)
             self.gradients = np.vstack([self.gradients, used[None, :]])
+            if self.grad_var is not None:  # same estimator and shots as Stage I
+                self.grad_var = np.vstack([self.grad_var, self.grad_var[: self.t0].mean(axis=0)])
             self.steps = np.vstack([self.steps, delta[None, :]])
             batch = self._training_batch(np.vstack(self.thetas), np.asarray([*self.noisy, c_t]))
             if isinstance(self.surrogate, PidnEnsemble):

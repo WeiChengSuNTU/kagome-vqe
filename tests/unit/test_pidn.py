@@ -280,6 +280,11 @@ def _zne_gd_source(tmp_path: Path) -> Path:
             "training": {"epochs": 40, "ensemble": 2, "refresh_epochs": 10},
             "stage3": {"anchor_every": 2, "max_step_factor": 2.0},
         },
+        {
+            "label": "pidn_noise_aware_anchor",
+            "training": {"epochs": 40, "ensemble": 1, "refresh_epochs": 10, "noise_aware": True},
+            "stage3": {"anchor_every": 2},
+        },
         {"label": "quad", "model": {"kind": "quadratic"}, "stage3": {"measure_noisy": False}},
         {"label": "last", "model": {"kind": "last_gradient"}, "stage3": {"measure_noisy": False}},
     ],
@@ -321,7 +326,7 @@ def test_pidn_workflow_continues_a_zne_run_and_counts_costs(
         r["circuit_executions"]
         == stage1 + r["stage3_circuit_executions"] + (r["anchor_circuit_executions"])
     )
-    if variant["label"] == "pidn_anchor":
+    if variant["label"].endswith("anchor"):
         assert anchors == 2
         assert r["anchor_circuit_executions"] == 2 * (2 * 4 + 1) * groups * 2
         assert np.isfinite(traj["anchor_cosine"]).sum() == 2
@@ -543,3 +548,40 @@ def test_stage_three_noisy_input_uses_the_stage_one_estimator() -> None:
     assert not noisy_input_mitigation(run(MitigationConfig(zne=ZneConfig(scales=[1, 3])))).enabled
     # relabelled Stage I measures the raw cost explicitly
     assert not noisy_input_mitigation(run(rs, relabelled_from="x")).enabled
+
+
+def test_noise_aware_loss_is_a_chi_square_and_stops_at_the_noise_floor() -> None:
+    batch = _toy_batch()
+    rng = np.random.default_rng(8)
+    batch.gradient_variance = rng.uniform(0.5, 2.0, size=batch.gradient.shape)
+    model_cfg = PidnModelConfig(history=3, gru_hidden=0, noisy_hidden=0, trunk=[16])
+    plain_cfg = PidnTrainingConfig(epochs=400, ensemble=1)
+    aware_cfg = plain_cfg.model_copy(update={"noise_aware": True, "noise_floor": 0.5})
+    net = PidnNetwork(model_cfg, batch.theta.shape[1], Normaliser.fit(batch, "raw"), 0)
+    _, predicted, _ = net.value_and_gradient(batch, create_graph=False)
+    expected = np.mean((predicted.value - batch.gradient) ** 2 / batch.gradient_variance)
+    got = float(pidn_losses(net, batch, aware_cfg, create_graph=False)["physics"].value)
+    assert got == pytest.approx(expected)
+    with pytest.raises(ValueError, match="variances"):
+        pidn_losses(net, _toy_batch(), aware_cfg, create_graph=False)
+    aware = PidnEnsemble(model_cfg, aware_cfg)
+    info = aware.fit(batch)
+    assert info["epochs_selected"][0] < 400  # stopped at the floor, not after every epoch
+    assert info["final_physics_loss"] <= 0.5 + 1e-9
+    assert batch.subset(slice(0, 3)).gradient_variance.shape == (3, batch.theta.shape[1])
+
+
+def test_gradient_variances_follow_the_shift_rule_and_zne_weights() -> None:
+    from kagome_vqe.ansatz.unshare import ParameterMap
+    from kagome_vqe.pidn.workflow import gradient_variances
+
+    mapping = ParameterMap(np.array([0, 0, 1, 2, 2, 2]), 3, None, np.full(6, 1.0))
+    traj = {
+        "zne_weights": np.array([[1.0], [1.0]]),
+        "scale_stds": np.array([[0.1], [0.2]]),
+    }
+    var = gradient_variances(traj, mapping)
+    assert np.allclose(var[0], 2 * 0.01 * np.array([2, 1, 3]))
+    assert np.allclose(var[1], 4 * var[0])
+    zne = {"zne_weights": np.array([[2.0, -1.0]]), "scale_stds": np.array([[0.1, 0.3]])}
+    assert np.allclose(gradient_variances(zne, mapping)[0], 2 * (0.04 + 0.09) * np.array([2, 1, 3]))

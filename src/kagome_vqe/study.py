@@ -345,6 +345,7 @@ def fitted_maxiter(
     * ADAM / GD: ``(E - 1) // k`` with ``k`` the gradient's energies per iteration
       (2 for SPSA, ``n + 1`` forward, ``2n + 1`` central, ``2K`` parameter shift over ``K``
       gate occurrences, plus one with ``measure_current``);
+    * MGD: ``(E - 1) // k`` with ``k = sample_points``;
     * scipy: ``None`` (variable cost; the budget guard stops it).
     """
     budget = evaluation_budget(backend, lattice)
@@ -365,6 +366,8 @@ def fitted_maxiter(
         if per_iteration is None:
             return None
         iterations = (budget - 1) // per_iteration
+    elif optimizer.type == "mgd":
+        iterations = (budget - 1) // optimizer.sample_points
     else:
         return None
     if iterations < 1:

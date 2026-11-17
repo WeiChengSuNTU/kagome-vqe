@@ -18,6 +18,16 @@ Stage I is held out, the epoch with the lowest held-out loss is kept (early stop
 ``refit`` the network is retrained on all steps for that many epochs. With shot-noise-dominated
 ZNE gradients two held-out steps are too noisy to select on (it picks a handful of epochs, an
 untrained network), which is why this is an ablation and not the default.
+
+**Noise-aware variant** (``noise_aware = True``, not in the paper). Each gradient target ``g_ti``
+is a parameter-shift estimate with known shot-noise variance ``sigma_ti^2``; the physics term
+becomes the chi-square per component,
+
+    L_phys = mean_{t,i} (grad C_hat(theta_t)_i - g_ti)^2 / sigma_ti^2,
+
+and training stops as soon as it reaches the noise floor ``L_phys <= noise_floor`` (1: the fit
+is as close to the targets as their noise allows) instead of driving it to zero, which is what
+memorising the noise means.
 """
 
 from __future__ import annotations
@@ -59,6 +69,9 @@ class PidnTrainingConfig(BaseModel):
         grad_clip: Global-norm clip of the weight gradient.
         refresh_epochs: Epochs of warm-started training after new anchor data.
         seed: Seeds the initialisations.
+        noise_aware: Weight the physics targets by ``1 / sigma^2`` and stop at the noise floor
+            (needs ``TrainingBatch.gradient_variance``).
+        noise_floor: Chi-square per gradient component at which training stops.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -76,6 +89,8 @@ class PidnTrainingConfig(BaseModel):
     grad_clip: float = Field(default=1.0, gt=0)
     refresh_epochs: int = Field(default=300, ge=1)
     seed: int = 0
+    noise_aware: bool = False
+    noise_floor: float = Field(default=1.0, gt=0)
 
 
 def pidn_losses(
@@ -87,8 +102,15 @@ def pidn_losses(
     v_err = value - Tensor(batch.value[:, None])
     l_value = (v_err * v_err).mean() * (1.0 / norm.value_scale**2)
     g_err = gradient - Tensor(batch.gradient)
-    g_scale = float(np.mean(np.sum(batch.gradient**2, axis=1))) or 1.0
-    l_phys = (g_err * g_err).sum(axis=1).mean() * (1.0 / g_scale)
+    if cfg.noise_aware:
+        if batch.gradient_variance is None:
+            msg = "noise_aware training needs the gradient variances of the targets"
+            raise ValueError(msg)
+        weights = 1.0 / np.maximum(batch.gradient_variance, 1e-12)
+        l_phys = (g_err * g_err * Tensor(weights)).mean()
+    else:
+        g_scale = float(np.mean(np.sum(batch.gradient**2, axis=1))) or 1.0
+        l_phys = (g_err * g_err).sum(axis=1).mean() * (1.0 / g_scale)
     total = l_value * cfg.value_weight + l_phys * cfg.beta
     terms = {"value": l_value, "physics": l_phys}
     if step is not None and cfg.step_weight > 0:
@@ -151,6 +173,9 @@ def _train(
             row |= {f"valid_{k}": float(v.value) for k, v in vterms.items()}
             monitor = float(vterms["total"].value)
         history.append(row)
+        if cfg.noise_aware and float(terms["physics"].value) <= cfg.noise_floor:
+            best = (monitor, epoch, network.get_state())
+            break
         if monitor < best[0]:
             best = (monitor, epoch, network.get_state())
         elif early_stopping and epoch - best[1] >= cfg.patience:

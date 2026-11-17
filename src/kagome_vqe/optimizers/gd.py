@@ -1,7 +1,9 @@
-"""Plain gradient descent with a pluggable gradient estimator.
+"""Plain gradient descent with a pluggable gradient estimator, optionally with momentum.
 
 The simplest update rule, ``x <- x - lr * g``. Useful as a control when comparing gradient
-estimators: with no moments, differences between runs come from the gradients alone.
+estimators: with no moments, differences between runs come from the gradients alone. With
+``momentum = beta > 0`` the heavy-ball rule ``v <- beta v + g``, ``x <- x - lr v`` averages the
+gradients of the last ``~1 / (1 - beta)`` iterations.
 """
 
 from __future__ import annotations
@@ -35,24 +37,34 @@ class GradientDescent:
         maxiter: Iteration budget.
         lr: Step size.
         gradient: Any :class:`GradientEstimator`; defaults to exact parameter shift.
+        momentum: Heavy-ball coefficient ``beta`` in ``[0, 1)``; 0 is plain descent.
     """
 
     def __init__(
-        self, maxiter: int = 100, lr: float = 0.05, gradient: GradientEstimator | None = None
+        self,
+        maxiter: int = 100,
+        lr: float = 0.05,
+        gradient: GradientEstimator | None = None,
+        *,
+        momentum: float = 0.0,
     ) -> None:
         """See class docstring."""
         if maxiter < 1:
             msg = "maxiter must be >= 1"
             raise ValueError(msg)
+        if not 0 <= momentum < 1:
+            msg = f"momentum must be in [0, 1), got {momentum}"
+            raise ValueError(msg)
         self._maxiter = maxiter
         self._lr = lr
+        self._momentum = momentum
         self._gradient: GradientEstimator = gradient or ParameterShift()
         self.records: list[dict[str, Any]] = []
 
     @property
     def name(self) -> str:
-        """``"gd_<gradient>"``."""
-        return f"gd_{self._gradient.name}"
+        """``"gd_<gradient>"`` (``"gdm_<gradient>"`` with momentum)."""
+        return f"{'gdm' if self._momentum else 'gd'}_{self._gradient.name}"
 
     @property
     def learning_rate(self) -> float:
@@ -81,6 +93,7 @@ class GradientDescent:
         nfev = 0
         history: list[float] = []
         self.records = []
+        velocity = np.zeros_like(x)
         t = 0
         for t in range(1, self._maxiter + 1):
             est = self._gradient.estimate(fn, x)
@@ -95,7 +108,8 @@ class GradientDescent:
                     "details": est.details,
                 }
             )
-            x = x - self._lr * est.grad
+            velocity = self._momentum * velocity + np.asarray(est.grad, dtype=float)
+            x = x - self._lr * velocity
             if callback is not None:
                 callback(IterationInfo(nit=t, x=x.copy(), fun=history[-1], nfev=nfev))
         final = fn(x)
@@ -108,5 +122,5 @@ class GradientDescent:
         """Debug representation."""
         return (
             f"GradientDescent(maxiter={self._maxiter}, lr={self._lr}, "
-            f"gradient={self._gradient.name!r})"
+            f"gradient={self._gradient.name!r}, momentum={self._momentum})"
         )

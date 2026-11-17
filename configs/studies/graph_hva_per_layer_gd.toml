@@ -1,0 +1,49 @@
+# Per-layer parameter sharing under noise (test B of docs/experiments/graph_hva_pidn_next.md):
+# the Stage I data PIDN would see with 10 shared angles instead of 32 per-gate ones.
+# Same noise, mitigation, shots, x0 scale and iteration count as the per-gate runs of
+# configs/studies/graph_hva_m2_gd.toml (full_rs: depolarising 1e-3 + readout 0.02, readout +
+# symmetry, 1024 shots per basis, 60 iterations), plus the exact statevector path.
+#
+# Learning rate: the largest Hessian eigenvalue at x0 (seed 1) is 81 with sharing against 30
+# per gate, so the per-gate lr = 0.05 would diverge (2 / 81 = 0.025). lr = 0.02 keeps
+# lr * lambda_max = 1.6 (per gate: 1.5).
+#
+# A shared angle's shift-rule gradient still needs 2 energies per gate occurrence (32 at p = 2):
+# sharing changes the dimension, not the circuits per gradient.
+#
+#   uv run kagome-vqe study configs/studies/graph_hva_per_layer_gd.toml --dry-run
+#   uv run kagome-vqe study configs/studies/graph_hva_per_layer_gd.toml --only <run> --no-summary
+name = "graph_hva_per_layer_gd"
+description = """
+Parameter-shift gradient descent (lr = 0.02, 60 iterations) with per-layer shared graph_hva angles
+(p = 2, 10 parameters): exact statevector and depolarising 1e-3 + readout 0.02 with readout +
+symmetry at 1024 shots per basis; seeds 1-3.
+"""
+seeds = [1, 2, 3]
+x0_scale = 0.1
+reps = [2]
+include_h0 = [false]
+success_threshold = 0.025
+track_ideal_gradient = true
+
+[ansatz]
+type = "graph_hva"
+parameterization = "per_layer"
+
+[[lattices]]
+label = "bm2x6"
+lattice = { kind = "kagome_bm_rectangle", rows = 2, cols = 6 }
+schedule = "prb105"
+
+[[backends]]
+label = "sv"
+backend = { kind = "statevector" }
+
+[[backends]]
+label = "full_rs"
+backend = { kind = "logical_noise", shots = 1024, final_shots = 16384, logical_noise = { channel = "depolarizing", probability = 1e-3, readout_error = 0.02, fast_kernels = true } }
+mitigation = { readout = true, symmetry = true }
+
+[[optimizers]]
+label = "gd_ps60"
+optimizer = { type = "gd", gradient = "parameter_shift", lr = 0.02, maxiter = 60, measure_current = true }

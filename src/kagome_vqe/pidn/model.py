@@ -124,6 +124,8 @@ class TrainingBatch:
         value: Target ``C_ZNE(theta_t)``, shape ``(B,)``.
         gradient: Target ``g_ZNE(theta_t)``, shape ``(B, n)``.
         step: Target ``theta_{t+1} - theta_t``, shape ``(B, n)``.
+        gradient_variance: Shot-noise variance of each gradient target, shape ``(B, n)``, or
+            ``None``; used by the noise-aware loss (``PidnTrainingConfig.noise_aware``).
     """
 
     theta: FloatArray
@@ -133,6 +135,7 @@ class TrainingBatch:
     value: FloatArray
     gradient: FloatArray
     step: FloatArray
+    gradient_variance: FloatArray | None = None
 
     def subset(self, rows: NDArray[np.int64] | slice) -> TrainingBatch:
         """Rows ``rows`` of every array."""
@@ -144,6 +147,7 @@ class TrainingBatch:
             self.value[rows],
             self.gradient[rows],
             self.step[rows],
+            None if self.gradient_variance is None else self.gradient_variance[rows],
         )
 
     def __len__(self) -> int:
@@ -160,6 +164,7 @@ def build_batch(
     gradients: FloatArray | None = None,
     steps: FloatArray | None = None,
     rows: list[int] | None = None,
+    gradient_variances: FloatArray | None = None,
 ) -> TrainingBatch:
     """Windows of a trajectory: one row per ``t in rows`` (default all), padded at the start.
 
@@ -171,6 +176,7 @@ def build_batch(
         gradients: Target gradients per row.
         steps: Target steps per row.
         rows: The steps ``t`` to include.
+        gradient_variances: Shot-noise variance of every gradient target, per row.
     """
     thetas = np.asarray(thetas, dtype=float)
     noisy = np.asarray(noisy, dtype=float)
@@ -192,6 +198,9 @@ def build_batch(
         value=nan_v if values is None else np.asarray(values, float)[rows],
         gradient=nan_g if gradients is None else np.asarray(gradients, float)[rows],
         step=nan_g.copy() if steps is None else np.asarray(steps, float)[rows],
+        gradient_variance=None
+        if gradient_variances is None
+        else np.asarray(gradient_variances, float)[rows],
     )
 
 

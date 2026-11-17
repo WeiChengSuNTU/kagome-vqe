@@ -25,6 +25,18 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- PIDN niche study on compiled hardware noise (`docs/experiments/graph_hva_pidn_next.md`):
+  model gradient descent (`optimizer.type = "mgd"`, `kagome_vqe.optimizers.mgd`, Sung et al.
+  2020), heavy-ball momentum for gradient descent (`optimizer.momentum`), a noise-aware PIDN loss
+  (`PidnTrainingConfig.noise_aware`: physics targets weighted by `1 / sigma^2` from the
+  parameter-shift shot variance, training stopped at the noise floor;
+  `pidn.workflow.gradient_variances`, `TrainingBatch.gradient_variance`); benchmarks
+  `noise_direction.py` (exact gradient direction and ZNE on FakeNighthawk / FakeKingston /
+  FakeGuadalupeV2 compiled noise), `pidn_per_layer_openloop.py`, `pidn_next_optimizers.py`
+  (equal-shot optimiser comparison under FakeKingston noise); study configs
+  `graph_hva_per_layer_reference.toml`, `graph_hva_per_layer_gd.toml`; tests for the per-layer
+  parameter map and the shift rule under sharing with noise.
+
 - PIDN with M2-mitigated Stage I data (`docs/experiments/graph_hva_pidn_m2.md`):
   `kagome_vqe.pidn.relabel` and CLI `pidn-relabel` (re-measure Stage I targets through another
   pipeline on a fixed path), `pidn.diagnostics.target_quality`, `benchmarks/pidn_target_quality.py`,

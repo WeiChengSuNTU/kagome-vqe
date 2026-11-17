@@ -11,7 +11,7 @@ from qiskit.quantum_info import Statevector
 
 from kagome_vqe.ansatz import GraphHVAnsatz
 from kagome_vqe.ansatz.unshare import EXCHANGE_SHIFT, ParameterMap, unshare_parameters
-from kagome_vqe.config import LatticeConfig, OptimizerConfig, RunConfig, ZneConfig
+from kagome_vqe.config import AnsatzConfig, LatticeConfig, OptimizerConfig, RunConfig, ZneConfig
 from kagome_vqe.hamiltonian import heisenberg_hamiltonian
 from kagome_vqe.mitigation import extrapolate, extrapolation_coefficients, zne_gradient_weights
 from kagome_vqe.noise import (
@@ -144,6 +144,66 @@ def test_shift_rule_is_exact_under_layer_noise() -> None:
         (energy(mapping.expand(theta + eps * e)) - energy(mapping.expand(theta - eps * e)))
         / (2 * eps)
         for e in np.eye(4)
+    ]
+    assert np.allclose(est.grad, fd, atol=1e-5)
+
+
+RECT12 = {"kind": "kagome_bm_rectangle", "rows": 2, "cols": 6}
+
+
+def test_per_layer_parameter_map_groups_the_gates_of_each_layer_and_cycle() -> None:
+    lattice = LatticeConfig.model_validate(RECT12).build()
+    spec = {"type": "graph_hva", "reps": 2, "schedule": "prb105"}
+    shared = AnsatzConfig.model_validate(spec | {"parameterization": "per_layer"}).build(lattice)
+    per_gate = AnsatzConfig.model_validate(spec).build(lattice)
+    assert isinstance(shared, GraphHVAnsatz)
+    layers = shared.schedule.num_layers
+    assert layers == 5
+    assert shared.num_parameters == 2 * layers == 10
+    assert per_gate.num_parameters == 2 * lattice.num_bonds == 32
+    _, mapping = unshare_parameters(shared.build(), exchange_gates=True)
+    assert mapping.num_parameters == 10
+    assert mapping.num_occurrences == 32  # one occurrence per exchange gate
+    bonds = [g for g in shared.gates if g.kind == "bond"]
+    expected = [(g.cycle - 1) * layers + g.layer for g in bonds]
+    assert mapping.occurrence_to_param.tolist() == expected
+    # every shared angle drives all gates of its layer, and only those
+    for index in range(10):
+        members = [g for g, j in zip(bonds, expected, strict=True) if j == index]
+        assert {(g.cycle, g.layer) for g in members} == {(index // layers + 1, index % layers)}
+    # the shared circuit is the per-gate circuit at the expanded angles
+    theta = np.random.default_rng(4).uniform(-1, 1, 10)
+    phi = mapping.expand(theta)
+    a = Statevector(shared.build().assign_parameters(theta))
+    b = Statevector(per_gate.build().assign_parameters(phi))
+    assert abs(a.inner(b)) == pytest.approx(1.0, abs=1e-10)
+    # chain rule: contract sums the occurrence gradients of each shared angle
+    g = np.arange(32, dtype=float)
+    assert np.allclose(mapping.contract(g), np.bincount(expected, weights=g, minlength=10))
+
+
+def test_shift_rule_under_sharing_is_exact_with_layer_noise() -> None:
+    ansatz = _ansatz(RECT6, reps=2, parameterization="per_layer")
+    marked, mapping = unshare_parameters(
+        ansatz.build(mark_noise_locations=True), exchange_gates=True
+    )
+    assert mapping.num_occurrences > mapping.num_parameters  # genuinely shared
+    from kagome_vqe.noise import insert_layer_noise
+
+    noisy = insert_layer_noise(marked, "depolarizing", 0.05)
+    h = heisenberg_hamiltonian(LatticeConfig.model_validate(RECT6).build()).to_matrix()
+
+    def energy(phi: np.ndarray) -> float:
+        return float(np.real(np.trace(h @ exact_noisy_state(noisy, phi))))
+
+    theta = np.random.default_rng(2).uniform(-0.6, 0.6, ansatz.num_parameters)
+    est = ParameterShift(mapping).estimate(_ExpandedObjective(energy, mapping), theta)
+    assert est.nfev == 2 * mapping.num_occurrences
+    eps = 1e-4
+    fd = [
+        (energy(mapping.expand(theta + eps * e)) - energy(mapping.expand(theta - eps * e)))
+        / (2 * eps)
+        for e in np.eye(theta.size)
     ]
     assert np.allclose(est.grad, fd, atol=1e-5)
 

@@ -41,6 +41,7 @@ from kagome_vqe.lattice import (
 from kagome_vqe.optimizers import (
     Adam,
     GradientDescent,
+    ModelGradientDescent,
     Optimizer,
     ScipyOptimizer,
     Spsa,
@@ -390,7 +391,8 @@ class OptimizerConfig(_Frozen):
     """Classical optimiser settings.
 
     Attributes:
-        type: ``"adam"``, ``"gd"`` (plain gradient descent), ``"spsa"`` or ``"scipy"``.
+        type: ``"adam"``, ``"gd"`` (plain gradient descent), ``"spsa"``, ``"scipy"`` or
+            ``"mgd"`` (model gradient descent, :mod:`kagome_vqe.optimizers.mgd`).
         maxiter: Iteration budget.
         lr: ADAM / gradient-descent learning rate, SPSA step size.
         perturbation: SPSA perturbation magnitude, also used by ``gradient = "spsa"``.
@@ -422,9 +424,14 @@ class OptimizerConfig(_Frozen):
             iteration), so the run's trajectory records ``C(theta_t)`` next to
             ``g(theta_t)``. Required for a zero-noise-extrapolated gradient (the chain-rule
             weights need the energies at the current point).
+        momentum: ``gd`` only: heavy-ball coefficient (0 = plain gradient descent).
+        sample_radius: ``mgd``: radius ``delta`` of the sampling ball and trust region.
+        sample_points: ``mgd``: new energies per iteration.
+        sample_radius_decay: ``mgd``: ``delta_t = delta / t^xi``; the rate decays with
+            ``alpha`` and ``stability_constant`` (0 when unset) like SPSA's gain.
     """
 
-    type: Literal["adam", "gd", "spsa", "scipy"] = "adam"
+    type: Literal["adam", "gd", "spsa", "scipy", "mgd"] = "adam"
     maxiter: Annotated[int, Field(ge=1)] = 100
     lr: Annotated[float, Field(gt=0)] = 0.01
     perturbation: Annotated[float, Field(gt=0)] = 0.01
@@ -445,11 +452,18 @@ class OptimizerConfig(_Frozen):
     max_step_norm: Annotated[float, Field(gt=0)] | None = None
     clip_update: Annotated[float, Field(gt=0)] | None = None
     measure_current: bool = False
+    momentum: Annotated[float, Field(ge=0, lt=1)] = 0.0
+    sample_radius: Annotated[float, Field(gt=0)] = 0.1
+    sample_points: Annotated[int, Field(ge=1)] = 32
+    sample_radius_decay: Annotated[float, Field(ge=0)] = 0.0
 
     @model_validator(mode="after")
     def _step_control_is_spsa(self) -> Self:
         if self.type != "spsa" and (self.max_step_norm is not None or self.clip_update is not None):
             msg = "optimizer.max_step_norm / clip_update only apply to type = 'spsa'"
+            raise ValueError(msg)
+        if self.momentum and self.type != "gd":
+            msg = "optimizer.momentum only applies to type = 'gd'"
             raise ValueError(msg)
         if self.measure_current and not self.uses_parameter_shift:
             msg = "optimizer.measure_current needs type 'gd' or 'adam' with parameter_shift"
@@ -489,7 +503,9 @@ class OptimizerConfig(_Frozen):
                 include_value=self.measure_current,
             )
             if self.type == "gd":
-                return GradientDescent(maxiter=self.maxiter, lr=self.lr, gradient=gradient)
+                return GradientDescent(
+                    maxiter=self.maxiter, lr=self.lr, gradient=gradient, momentum=self.momentum
+                )
             return Adam(
                 maxiter=self.maxiter,
                 lr=self.lr,
@@ -498,6 +514,17 @@ class OptimizerConfig(_Frozen):
                 gradient=gradient,
                 tol=1e-6 if self.tol is None else self.tol,
                 amsgrad=self.amsgrad,
+            )
+        if self.type == "mgd":
+            return ModelGradientDescent(
+                maxiter=self.maxiter,
+                lr=self.lr,
+                sample_radius=self.sample_radius,
+                sample_points=self.sample_points,
+                rate_decay_exponent=self.alpha if self.calibrate else 0.0,
+                stability_constant=self.stability_constant or 0.0,
+                sample_radius_decay_exponent=self.sample_radius_decay,
+                seed=rng,
             )
         if self.type == "spsa":
             extra = (
@@ -536,6 +563,11 @@ class OptimizerConfig(_Frozen):
                 + (" plus the current point" if self.measure_current else ""),
             }[self.gradient]
             return f"{self.gradient}: {detail}"
+        if self.type == "mgd":
+            return (
+                f"mgd: least-squares quadratic model from {self.sample_points} new energies per "
+                f"iteration in a ball of radius {self.sample_radius:g} (trust region)"
+            )
         if self.type == "spsa":
             schedule = (
                 f"calibrated gains (alpha {self.alpha:g}, gamma {self.gamma:g}, "

@@ -42,6 +42,7 @@ from kagome_vqe.optimizers.gradients import (
     SimultaneousPerturbation,
     make_gradient,
 )
+from kagome_vqe.optimizers.mgd import ModelGradientDescent
 from kagome_vqe.optimizers.scipy import ScipyOptimizer
 from kagome_vqe.optimizers.spsa import Spsa
 
@@ -55,6 +56,7 @@ __all__ = [
     "GradientEstimate",
     "GradientEstimator",
     "IterationInfo",
+    "ModelGradientDescent",
     "Objective",
     "OptimizeResult",
     "Optimizer",
