@@ -217,7 +217,8 @@ rescale = { twin = "auto" }   # divide out the damping measured on a classically
   `noise_scaling = "probability"` (`p_e -> lambda p_e`) or `"layer_folding"` (each noisy layer
   `L -> L (L^dag L)^k`). The M2 comparison on that model is in
   [`docs/experiments/graph_hva_m2_mitigation.md`](docs/experiments/graph_hva_m2_mitigation.md)
-  (readout + symmetry: bias <= 0.4 % at no extra variance). With a parameter-shift gradient and `optimizer.measure_current = true` the gradient is
+  (readout + symmetry: bias <= 0.4 % at no extra variance at `p_e = 1e-3`; at stronger noise
+  readout + symmetry + twin, within 1 % up to `1e-2`). With a parameter-shift gradient and `optimizer.measure_current = true` the gradient is
   that of the extrapolated cost, and every iteration is recorded in `trajectory.npz`; see
   [`docs/experiments/graph_hva_mitigation.md`](docs/experiments/graph_hva_mitigation.md).
 

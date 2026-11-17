@@ -1,0 +1,55 @@
+# Parameter-shift gradient descent with M2-style mitigation under PRB 106 depolarising noise
+# p_e = 1e-3 plus readout error q = 0.02 (the "full" noise model of
+# configs/mitigation/graph_hva_m2_fixed.toml), PRB 105 2x6 rectangle, graph_hva p = 2, seeds 1-3.
+#
+# Two questions: (1) does readout correction + symmetry filtering improve gradient descent at
+# equal cost (60 iterations each, unmitigated vs readout+symmetry, 1024 shots per basis)?
+# (2) Stage I for PIDN with a high signal-to-noise path: readout+symmetry with 8x the shots
+# (8192 per basis), 12 iterations. Every run records trajectory.npz with the noise-free gradient.
+#
+#   uv run kagome-vqe study configs/studies/graph_hva_m2_gd.toml --dry-run
+#   uv run kagome-vqe study configs/studies/graph_hva_m2_gd.toml --only <run> --no-summary  # one process per run
+name = "graph_hva_m2_gd"
+description = """
+Parameter-shift gradient descent (lr = 0.05) under depolarising p_e = 1e-3 + readout error 0.02:
+unmitigated and readout+symmetry for 60 iterations (1024 shots per basis), readout+symmetry with
+8192 shots per basis for 12 iterations (PIDN Stage I with a smooth path); seeds 1-3.
+"""
+seeds = [1, 2, 3]
+x0_scale = 0.1
+reps = [2]
+include_h0 = [false]
+success_threshold = 0.025
+track_ideal_gradient = true
+
+[ansatz]
+type = "graph_hva"
+
+[[lattices]]
+label = "bm2x6"
+lattice = { kind = "kagome_bm_rectangle", rows = 2, cols = 6 }
+schedule = "prb105"
+
+[[backends]]
+label = "full_raw"
+backend = { kind = "logical_noise", shots = 1024, final_shots = 16384, logical_noise = { channel = "depolarizing", probability = 1e-3, readout_error = 0.02, fast_kernels = true } }
+
+[[backends]]
+label = "full_rs"
+backend = { kind = "logical_noise", shots = 1024, final_shots = 16384, logical_noise = { channel = "depolarizing", probability = 1e-3, readout_error = 0.02, fast_kernels = true } }
+mitigation = { readout = true, symmetry = true }
+
+[[backends]]
+label = "full_rs_x8"
+backend = { kind = "logical_noise", shots = 8192, final_shots = 16384, logical_noise = { channel = "depolarizing", probability = 1e-3, readout_error = 0.02, fast_kernels = true } }
+mitigation = { readout = true, symmetry = true }
+
+[[optimizers]]
+label = "gd_ps60"
+backends = ["full_raw", "full_rs"]
+optimizer = { type = "gd", gradient = "parameter_shift", lr = 0.05, maxiter = 60, measure_current = true }
+
+[[optimizers]]
+label = "gd_ps12"
+backends = ["full_rs_x8"]
+optimizer = { type = "gd", gradient = "parameter_shift", lr = 0.05, maxiter = 12, measure_current = true }
