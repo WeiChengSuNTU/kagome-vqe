@@ -522,3 +522,24 @@ def test_target_quality_measures_gradient_noise() -> None:
     assert q["cosine_to_ideal"] > 0.95
     assert q["value_error_mean"] == pytest.approx(0.2)
     assert q["signal_to_noise_late"] > 5
+
+
+def test_stage_three_noisy_input_uses_the_stage_one_estimator() -> None:
+    """C_noisy in Stage III must come from the estimator behind the Stage I noisy column."""
+    from types import SimpleNamespace
+
+    from kagome_vqe.config import MitigationConfig, ZneConfig
+    from kagome_vqe.pidn.workflow import noisy_input_mitigation
+
+    def run(mitigation: MitigationConfig, **result: Any) -> Any:
+        return SimpleNamespace(config=SimpleNamespace(mitigation=mitigation), result=result)
+
+    rs = MitigationConfig(readout=True, symmetry=True)
+    # gradient descent without ZNE records the mitigated value itself
+    assert noisy_input_mitigation(run(rs)) == rs
+    # ZNE records the scale-1 energies of its inner (counts-level) stack
+    zne = MitigationConfig(readout=True, zne=ZneConfig(scales=[1, 3, 5]))
+    assert noisy_input_mitigation(run(zne)) == MitigationConfig(readout=True)
+    assert not noisy_input_mitigation(run(MitigationConfig(zne=ZneConfig(scales=[1, 3])))).enabled
+    # relabelled Stage I measures the raw cost explicitly
+    assert not noisy_input_mitigation(run(rs, relabelled_from="x")).enabled

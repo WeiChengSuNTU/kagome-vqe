@@ -1,0 +1,51 @@
+# Surrogates for the open-loop capacity sweep of benchmarks/pidn_shot_scaling.py: is the PIDN
+# network too large for ten Stage I points (does it memorise shot noise)? The paper does not give
+# the architecture; pidn_paper is this package's reading of it (GRU 32, noisy branch 16, trunk
+# 64-64, about 1.2e4 weights per member, ensemble of 3). Only the variants are used by the
+# open-loop test; `sources` points at the emulated runs for the closed loop.
+#
+#   uv run python benchmarks/pidn_shot_scaling.py openloop results/<ts>-graph_hva_pidn_shot_scaling \
+#       configs/pidn/graph_hva_pidn_capacity.toml --real
+name = "graph_hva_pidn_capacity"
+description = """
+Capacity and regularisation sweep of the PIDN surrogate (open loop): paper-sized, small, tiny
+(no recurrent or noisy branch), strong weight decay, a larger ensemble, short training; quadratic
+and last-gradient baselines.
+"""
+sources = ["results/*-graph_hva_pidn_shot_scaling/runs/*"]
+t_init = 10
+total_iterations = 60
+
+[[variants]]
+label = "pidn_paper"
+
+[[variants]]
+label = "pidn_small"
+model = { gru_hidden = 8, noisy_hidden = 8, trunk = [32] }
+
+[[variants]]
+label = "pidn_tiny"
+model = { gru_hidden = 0, noisy_hidden = 0, trunk = [16] }
+stage3 = { measure_noisy = false }
+
+[[variants]]
+label = "pidn_wd"
+training = { weight_decay = 1e-2 }
+
+[[variants]]
+label = "pidn_ens8"
+training = { ensemble = 8 }
+
+[[variants]]
+label = "pidn_short"
+training = { epochs = 200 }
+
+[[variants]]
+label = "quadratic"
+model = { kind = "quadratic" }
+stage3 = { measure_noisy = false }
+
+[[variants]]
+label = "last_gradient"
+model = { kind = "last_gradient" }
+stage3 = { measure_noisy = false }

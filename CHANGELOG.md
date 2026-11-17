@@ -16,6 +16,10 @@ All notable changes to this project are documented here. The format follows
 
 ### Fixed
 
+- PIDN Stage III measured its noisy input `C_noisy` unmitigated even when Stage I recorded a
+  mitigated cost (readout + symmetry Stage I runs), putting the input ~10 % outside its training
+  range; it now uses the Stage I estimator (`pidn.workflow.noisy_input_mitigation`). ZNE and
+  relabelled sources were not affected.
 - `kagome-vqe study --dry-run` (time estimate) failed for backends with twin rescaling: it now
   passes the twin to the estimator.
 
@@ -27,6 +31,11 @@ All notable changes to this project are documented here. The format follows
   `benchmarks/pidn_exact_targets_control.py`; PIDN run names carry the source pipeline; the PIDN
   workflow keeps its estimators open (twin rescaling) and accepts `baseline_studies`; configs
   `configs/pidn/graph_hva_pidn_m2*.toml`, `configs/studies/graph_hva_m2_gd.toml`.
+  Follow-up: `benchmarks/pidn_shot_scaling.py` (emulated Stage I at 1x-4096x shots calibrated
+  on the real runs, capacity sweep with a memorisation test, Gaussian-smoothed targets,
+  closed-loop table; configs `graph_hva_pidn_capacity.toml`, `graph_hva_pidn_shot_scaling.toml`)
+  and `benchmarks/pidn_landscape_spectrum.py` (the paper's Gaussian-smoothed contrast and
+  low-frequency power ratio on measured landscape slices).
 - PIDN (physics-informed denoising network, arXiv:2605.02066) surrogate optimisation
   (`docs/experiments/graph_hva_pidn.md`): `kagome_vqe.pidn` with a numpy autodiff engine
   supporting double backpropagation (`pidn.autodiff`), the dual-branch dual-head network,

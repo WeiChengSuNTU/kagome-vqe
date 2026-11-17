@@ -213,7 +213,13 @@ def _surrogate(variant: PidnVariant) -> Surrogate:
 class _Quantum:
     """The source run's backend: noisy energies, ZNE gradients, final ZNE re-measurement."""
 
-    def __init__(self, source_cfg: Any, seed: int) -> None:
+    def __init__(self, source_cfg: Any, seed: int, *, noisy_mitigation: Any = None) -> None:
+        """Open the estimators.
+
+        ``noisy_mitigation`` is the mitigation of the estimator behind ``C_noisy`` (PIDN's input):
+        it must be the one that produced the Stage I noisy column (see
+        :func:`noisy_input_mitigation`); ``None`` means unmitigated.
+        """
         from kagome_vqe.estimators import make_estimator
         from kagome_vqe.vqe import (
             EnergyObjective,
@@ -232,7 +238,14 @@ class _Quantum:
         self.shots = 0 if exact else int(source_cfg.backend.shots or 0)
         if exact:
             self.groups = 0  # exact energies: no circuits are counted
-        self._noisy = make_estimator(source_cfg.backend, self.prep.problem, None, seed=seed)
+        self._noisy = make_estimator(
+            source_cfg.backend,
+            self.prep.problem,
+            None,
+            seed=seed,
+            mitigation=noisy_mitigation,
+            twin=self.prep.circuit_twin,
+        )
         self._zne = make_estimator(
             source_cfg.backend,
             self.prep.problem,
@@ -279,6 +292,27 @@ class _Quantum:
         }
 
 
+def noisy_input_mitigation(run: Any) -> Any:
+    """Mitigation of the estimator that produced a source's noisy column ``scale_values[:, 0]``.
+
+    Stage III must measure ``C_noisy`` the same way, or the surrogate's noisy input leaves its
+    training distribution (an unmitigated energy sits ~10 % above a readout+symmetry one).
+
+    * Relabelled runs (:mod:`kagome_vqe.pidn.relabel`) measure it unmitigated.
+    * ZNE runs record the scale-1 energies of the ZNE estimator's inner stack: the counts-level
+      mitigation (readout, symmetry), without extrapolation or rescaling.
+    * Other gradient-descent runs record the value itself: the full mitigation stack.
+    """
+    from kagome_vqe.config import MitigationConfig
+
+    if "relabelled_from" in run.result:
+        return MitigationConfig()
+    mitigation = run.config.mitigation
+    if mitigation.zne is not None:
+        return mitigation.model_copy(update={"zne": None, "rescale": None})
+    return mitigation
+
+
 def _source_arrays(source: Path, t_init: int) -> tuple[Any, dict[str, np.ndarray]]:
     from kagome_vqe.results import load_run
 
@@ -308,7 +342,11 @@ class _PidnRun:
         run, traj = _source_arrays(source, self.t0)
         self.cfg, self.variant, self.source, self.run, self.traj = cfg, variant, source, run, traj
         self.lr = cfg.learning_rate or float(traj["learning_rate"])
-        self.q = _Quantum(run.config, run.config.seed + cfg.seed_offset)
+        self.q = _Quantum(
+            run.config,
+            run.config.seed + cfg.seed_offset,
+            noisy_mitigation=noisy_input_mitigation(run),
+        )
         self.n = traj["theta"].shape[1]
         self.window = variant.model.history
         t0 = self.t0

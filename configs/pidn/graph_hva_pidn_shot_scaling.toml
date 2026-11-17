@@ -1,0 +1,33 @@
+# Closed-loop PIDN on emulated Stage I data of increasing signal-to-noise
+# (benchmarks/pidn_shot_scaling.py generate): parameter-shift gradient descent under depolarising
+# p_e = 1e-3 + readout error 0.02 with readout+symmetry, emulated at k = 1, 8, 64, 512, 4096 times
+# 1024 shots per basis and without shot noise (kinf), plus two paths smoothed by a gradient
+# moving average. Stage I = the first 10 iterations; Stage III measures the real noisy cost
+# (readout+symmetry, 1024 shots per basis) at every step. No anchors (an anchor would be a real
+# 1024-shot gradient, not a k-times one). The moving-average paths are run open loop only:
+#   uv run kagome-vqe pidn configs/pidn/graph_hva_pidn_shot_scaling.toml --only -k8-s  (etc.)
+#
+#   uv run kagome-vqe pidn configs/pidn/graph_hva_pidn_shot_scaling.toml --dry-run
+name = "graph_hva_pidn_shot_scaling_closed"
+description = """
+PIDN continuation of emulated readout+symmetry gradient descent with 1 to 4096 times the shots
+(and none), Stage I = 10 iterations, seeds 1-3; surrogate-only Stage III.
+"""
+sources = ["results/*-graph_hva_pidn_shot_scaling/runs/*"]
+baseline_studies = ["results/*-graph_hva_m2_gd"]
+t_init = 10
+total_iterations = 60
+track_ideal = true
+
+[[variants]]
+label = "pidn_paper"
+
+[[variants]]
+label = "quadratic"
+model = { kind = "quadratic" }
+stage3 = { measure_noisy = false }
+
+[[variants]]
+label = "last_gradient"
+model = { kind = "last_gradient" }
+stage3 = { measure_noisy = false }
