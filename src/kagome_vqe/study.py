@@ -521,6 +521,7 @@ def estimate_study(
                 prep.backend,
                 seed=0,
                 mitigation=cell.config.mitigation,
+                twin=prep.circuit_twin,
             ) as estimator:
                 estimator.evaluate(points[:1])  # warm-up (compilation caches)
                 tick = time.perf_counter()

@@ -1,0 +1,50 @@
+# Full optimisations with the M2 stacks (M2's "full optimisations" section, graph_hva): the
+# noisy-optimiser study's best optimiser (calibrated SPSA with step-norm cap 0.2,
+# graph_hva_noise_opt_representative.toml) under depolarising p_e = 1e-3 + readout error 0.02,
+# unmitigated, readout + symmetry, and readout + symmetry + twin (main's M2 choice). Same shot
+# budget as the noise study (4,608,000 shots: 1500 energies x 1024 x 3 bases), seeds 1-3.
+# Parameter-shift gradient descent with the same noise: graph_hva_m2_gd.toml.
+#
+#   uv run kagome-vqe study configs/studies/graph_hva_m2_spsa.toml --dry-run
+#   uv run kagome-vqe study configs/studies/graph_hva_m2_spsa.toml --only <run> --no-summary  # one process per run
+name = "graph_hva_m2_spsa"
+description = """
+Calibrated SPSA (step norm capped at 0.2) under depolarising p_e = 1e-3 + readout error 0.02,
+2x6 rectangle, graph_hva p = 2: unmitigated, readout+symmetry, readout+symmetry+twin; 4,608,000
+shots each, seeds 1-3.
+"""
+seeds = [1, 2, 3]
+x0_scale = 0.1
+reps = [2]
+include_h0 = [false]
+success_threshold = 0.025
+
+[ansatz]
+type = "graph_hva"
+
+[[lattices]]
+label = "bm2x6"
+lattice = { kind = "kagome_bm_rectangle", rows = 2, cols = 6 }
+schedule = "prb105"
+
+[[backends]]
+label = "full_raw"
+backend = { kind = "logical_noise", shots = 1024, final_shots = 16384, logical_noise = { channel = "depolarizing", probability = 1e-3, readout_error = 0.02, fast_kernels = true } }
+budget = { max_shots = 4608000 }
+
+[[backends]]
+label = "full_rs"
+backend = { kind = "logical_noise", shots = 1024, final_shots = 16384, logical_noise = { channel = "depolarizing", probability = 1e-3, readout_error = 0.02, fast_kernels = true } }
+mitigation = { readout = true, symmetry = true }
+budget = { max_shots = 4608000 }
+
+[[backends]]
+label = "full_rst"
+backend = { kind = "logical_noise", shots = 1024, final_shots = 16384, logical_noise = { channel = "depolarizing", probability = 1e-3, readout_error = 0.02, fast_kernels = true } }
+mitigation = { readout = true, symmetry = true, rescale = { twin = "auto" } }
+budget = { max_shots = 4608000 }
+
+[[optimizers]]
+label = "spsa_cap0.2"
+fit_maxiter_to_budget = true
+optimizer = { type = "spsa", calibrate = true, perturbation = 0.1, calibration_samples = 25, target_magnitude = 0.2, max_step_norm = 0.2 }

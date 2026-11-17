@@ -14,6 +14,11 @@ All notable changes to this project are documented here. The format follows
 - `zne.scales` must start with 1; `logical_noise` accepts ZNE (probability scaling or layer
   folding) and parameter-shift gradients.
 
+### Fixed
+
+- `kagome-vqe study --dry-run` (time estimate) failed for backends with twin rescaling: it now
+  passes the twin to the estimator.
+
 ### Added
 
 - PIDN with M2-mitigated Stage I data (`docs/experiments/graph_hva_pidn_m2.md`):
@@ -37,6 +42,10 @@ All notable changes to this project are documented here. The format follows
   with delta-method standard errors, one-off calibration per estimator);
   `kagome_vqe.mitigation_study` and CLI `mitigation-study` / `mitigation-summary` (fixed-point
   table, fresh setup per repeat, `--workers`); config `configs/mitigation/graph_hva_m2_fixed.toml`.
+  Completed like main's M2: `benchmarks/m2_exact_limits.py` (infinite-shot limit of every stack
+  from exact density matrices, filter-then-correct, twin damping, predicted spreads),
+  `graph_hva_m2_fixed_strong.toml` (`p_e` = 3e-3, 1e-2), full optimisations
+  `configs/studies/graph_hva_m2_spsa.toml` and `graph_hva_m2_gd.toml`.
 - Error mitigation for `graph_hva` under PRB 106 layer noise
   (`docs/experiments/graph_hva_mitigation.md`):
   - Exchange-gate parameter-shift rule: `unshare_parameters(..., exchange_gates=True)` treats

@@ -1,0 +1,49 @@
+point,noise,stack,mitigation,backend,ideal_energy,exact_energy,mean,bias,bias_percent,bias_sem_percent,spread,mean_reported_std,rmse,below_ground,repeats,shots_per_energy,setup_shots,wall_time_s
+opt,gates_0.003,none,none,logical_noise[depolarizing p=0.003],-19.6561,-19.9103,-17.8763,1.77976,9.05448,0.178964,0.140709,0.127324,1.78531,False,16,3072,0,8.18351
+opt,gates_0.003,readout,readout,logical_noise[depolarizing p=0.003],-19.6561,-19.9103,-17.8763,1.77976,9.05448,0.178964,0.140709,0.127324,1.78531,False,16,3072,32768,7.62132
+opt,gates_0.003,symmetry,symmetry,logical_noise[depolarizing p=0.003],-19.6561,-19.9103,-19.2854,0.370698,1.88592,0.14652,0.1152,0.126299,0.388186,False,16,3072,0,8.01709
+opt,gates_0.003,readout+symmetry,readout+symmetry,logical_noise[depolarizing p=0.003],-19.6561,-19.9103,-19.2854,0.370698,1.88592,0.14652,0.1152,0.126299,0.388186,False,16,3072,32768,7.61447
+opt,gates_0.003,zne_prob,zne,logical_noise[depolarizing p=0.003],-19.6561,-19.9103,-19.7348,-0.078688,-0.400324,0.402043,0.316104,0.231553,0.325751,False,16,9216,0,62.1959
+opt,gates_0.003,zne_fold,zne,logical_noise[depolarizing p=0.003],-19.6561,-19.9103,-19.7,-0.0438579,-0.223126,0.2899,0.227932,0.186229,0.232113,False,16,9216,0,166.187
+opt,gates_0.003,readout+zne_prob,readout+zne,logical_noise[depolarizing p=0.003],-19.6561,-19.9103,-19.7348,-0.078688,-0.400324,0.402043,0.316104,0.231553,0.325751,False,16,9216,98304,58.6499
+opt,gates_0.003,readout+symmetry+zne_prob,readout+symmetry+zne,logical_noise[depolarizing p=0.003],-19.6561,-19.9103,-20.134,-0.477925,-2.43143,0.284258,0.223496,0.219595,0.527601,True,16,9216,98304,61.67
+opt,gates_0.003,twin,twin,logical_noise[depolarizing p=0.003],-19.6561,-19.9103,-19.912,-0.255894,-1.30185,0.252092,0.198206,0.176542,0.323678,False,16,3072,49152,373.803
+opt,gates_0.003,readout+twin,readout+twin,logical_noise[depolarizing p=0.003],-19.6561,-19.9103,-19.912,-0.255894,-1.30185,0.252092,0.198206,0.176542,0.323678,False,16,3072,81920,394.128
+opt,gates_0.003,symmetry+twin,symmetry+twin,logical_noise[depolarizing p=0.003],-19.6561,-19.9103,-19.829,-0.172908,-0.879666,0.200485,0.15763,0.169203,0.233975,False,16,3072,49152,372.912
+opt,gates_0.003,readout+symmetry+twin,readout+symmetry+twin,logical_noise[depolarizing p=0.003],-19.6561,-19.9103,-19.829,-0.172908,-0.879666,0.200485,0.15763,0.169203,0.233975,False,16,3072,81920,392.428
+opt,full_0.003,none,none,logical_noise[depolarizing p=0.003 + readout q=0.02],-19.6561,-19.9103,-16.4458,3.2103,16.3323,0.178833,0.140606,0.141987,3.21338,False,16,3072,0,12.0163
+opt,full_0.003,readout,readout,logical_noise[depolarizing p=0.003 + readout q=0.02],-19.6561,-19.9103,-17.8407,1.81542,9.23594,0.20092,0.157972,0.154046,1.82229,False,16,3072,32768,16.698
+opt,full_0.003,symmetry,symmetry,logical_noise[depolarizing p=0.003 + readout q=0.02],-19.6561,-19.9103,-18.8951,0.760953,3.87133,0.159981,0.125784,0.148369,0.771279,False,16,3072,0,12.7719
+opt,full_0.003,readout+symmetry,readout+symmetry,logical_noise[depolarizing p=0.003 + readout q=0.02],-19.6561,-19.9103,-19.3116,0.34446,1.75243,0.1632,0.128315,0.160223,0.367583,False,16,3072,32768,11.0742
+opt,full_0.003,zne_prob,zne,logical_noise[depolarizing p=0.003 + readout q=0.02],-19.6561,-19.9103,-18.1596,1.49651,7.61348,0.448077,0.352298,0.255828,1.53742,False,16,9216,0,70.7321
+opt,full_0.003,zne_fold,zne,logical_noise[depolarizing p=0.003 + readout q=0.02],-19.6561,-19.9103,-18.1243,1.53179,7.79296,0.345339,0.27152,0.205687,1.55567,False,16,9216,0,155.635
+opt,full_0.003,readout+zne_prob,readout+zne,logical_noise[depolarizing p=0.003 + readout q=0.02],-19.6561,-19.9103,-19.7059,-0.0498069,-0.253392,0.481778,0.378795,0.2776,0.382055,False,16,9216,98304,100.969
+opt,full_0.003,readout+symmetry+zne_prob,readout+symmetry+zne,logical_noise[depolarizing p=0.003 + readout q=0.02],-19.6561,-19.9103,-20.1552,-0.499068,-2.539,0.447258,0.351654,0.281768,0.610516,True,16,9216,98304,68.5838
+opt,full_0.003,twin,twin,logical_noise[depolarizing p=0.003 + readout q=0.02],-19.6561,-19.9103,-19.9726,-0.316498,-1.61017,0.290492,0.228398,0.207181,0.390303,False,16,3072,49152,382.877
+opt,full_0.003,readout+twin,readout+twin,logical_noise[depolarizing p=0.003 + readout q=0.02],-19.6561,-19.9103,-19.976,-0.319881,-1.62739,0.291524,0.229209,0.20725,0.393524,False,16,3072,81920,393.117
+opt,full_0.003,symmetry+twin,symmetry+twin,logical_noise[depolarizing p=0.003 + readout q=0.02],-19.6561,-19.9103,-19.6636,-0.00750785,-0.038196,0.244107,0.191928,0.195188,0.192074,False,16,3072,49152,407.407
+opt,full_0.003,readout+symmetry+twin,readout+symmetry+twin,logical_noise[depolarizing p=0.003 + readout q=0.02],-19.6561,-19.9103,-19.7958,-0.13974,-0.710925,0.253412,0.199244,0.207094,0.243363,False,16,3072,81920,418.985
+opt,gates_0.01,none,none,logical_noise[depolarizing p=0.01],-19.6561,-19.9103,-14.485,5.17112,26.3079,0.195064,0.153368,0.157203,5.17339,False,16,3072,0,52.9484
+opt,gates_0.01,readout,readout,logical_noise[depolarizing p=0.01],-19.6561,-19.9103,-14.485,5.17112,26.3079,0.195064,0.153368,0.157203,5.17339,False,16,3072,32768,55.5382
+opt,gates_0.01,symmetry,symmetry,logical_noise[depolarizing p=0.01],-19.6561,-19.9103,-17.7121,1.94401,9.89012,0.163047,0.128194,0.188505,1.94823,False,16,3072,0,44.9754
+opt,gates_0.01,readout+symmetry,readout+symmetry,logical_noise[depolarizing p=0.01],-19.6561,-19.9103,-17.7121,1.94401,9.89012,0.163047,0.128194,0.188505,1.94823,False,16,3072,32768,44.2441
+opt,gates_0.01,zne_prob,zne,logical_noise[depolarizing p=0.01],-19.6561,-19.9103,-19.866,-0.209936,-1.06804,0.432749,0.340246,0.409386,0.399801,False,16,9216,0,220.316
+opt,gates_0.01,zne_fold,zne,logical_noise[depolarizing p=0.01],-19.6561,-19.9103,-19.6039,0.052159,0.265358,0.365974,0.287745,0.338011,0.292434,False,16,9216,0,437.644
+opt,gates_0.01,readout+zne_prob,readout+zne,logical_noise[depolarizing p=0.01],-19.6561,-19.9103,-19.866,-0.209936,-1.06804,0.432749,0.340246,0.409386,0.399801,False,16,9216,98304,190.172
+opt,gates_0.01,readout+symmetry+zne_prob,readout+symmetry+zne,logical_noise[depolarizing p=0.01],-19.6561,-19.9103,-21.8235,-2.16738,-11.0265,0.654164,0.514332,0.458794,2.22757,True,16,9216,98304,217.461
+opt,gates_0.01,twin,twin,logical_noise[depolarizing p=0.01],-19.6561,-19.9103,-20.1484,-0.492269,-2.50441,0.241725,0.190055,0.262258,0.527684,True,16,3072,49152,1268.86
+opt,gates_0.01,readout+twin,readout+twin,logical_noise[depolarizing p=0.01],-19.6561,-19.9103,-20.1484,-0.492269,-2.50441,0.241725,0.190055,0.262258,0.527684,True,16,3072,81920,1223.56
+opt,gates_0.01,symmetry+twin,symmetry+twin,logical_noise[depolarizing p=0.01],-19.6561,-19.9103,-19.5212,0.134925,0.686427,0.287712,0.226212,0.254097,0.263394,False,16,3072,49152,1214.92
+opt,gates_0.01,readout+symmetry+twin,readout+symmetry+twin,logical_noise[depolarizing p=0.01],-19.6561,-19.9103,-19.5212,0.134925,0.686427,0.287712,0.226212,0.254097,0.263394,False,16,3072,81920,1132.68
+opt,full_0.01,none,none,logical_noise[depolarizing p=0.01 + readout q=0.02],-19.6561,-19.9103,-13.344,6.31211,32.1127,0.153857,0.12097,0.165612,6.31327,False,16,3072,0,53.9559
+opt,full_0.01,readout,readout,logical_noise[depolarizing p=0.01 + readout q=0.02],-19.6561,-19.9103,-14.4758,5.18028,26.3546,0.174611,0.137287,0.179668,5.1821,False,16,3072,32768,60.2949
+opt,full_0.01,symmetry,symmetry,logical_noise[depolarizing p=0.01 + readout q=0.02],-19.6561,-19.9103,-16.9687,2.68742,13.6722,0.226143,0.177803,0.213693,2.6933,False,16,3072,0,46.4443
+opt,full_0.01,readout+symmetry,readout+symmetry,logical_noise[depolarizing p=0.01 + readout q=0.02],-19.6561,-19.9103,-17.7671,1.88895,9.61001,0.262093,0.206069,0.249059,1.90016,False,16,3072,32768,48.3276
+opt,full_0.01,zne_prob,zne,logical_noise[depolarizing p=0.01 + readout q=0.02],-19.6561,-19.9103,-18.3625,1.29356,6.58098,0.393586,0.309454,0.426678,1.33006,False,16,9216,0,219.128
+opt,full_0.01,zne_fold,zne,logical_noise[depolarizing p=0.01 + readout q=0.02],-19.6561,-19.9103,-18.0957,1.56041,7.93857,0.366793,0.288389,0.350998,1.58684,False,16,9216,0,429.897
+opt,full_0.01,readout+zne_prob,readout+zne,logical_noise[depolarizing p=0.01 + readout q=0.02],-19.6561,-19.9103,-19.9226,-0.266497,-1.3558,0.421044,0.331043,0.462911,0.424983,False,16,9216,98304,223.77
+opt,full_0.01,readout+symmetry+zne_prob,readout+symmetry+zne,logical_noise[depolarizing p=0.01 + readout q=0.02],-19.6561,-19.9103,-21.7652,-2.10906,-10.7298,0.793722,0.624059,0.599326,2.19945,True,16,9216,98304,229.013
+opt,full_0.01,twin,twin,logical_noise[depolarizing p=0.01 + readout q=0.02],-19.6561,-19.9103,-20.1315,-0.475366,-2.41841,0.246056,0.19346,0.2952,0.513224,True,16,3072,49152,1198.08
+opt,full_0.01,readout+twin,readout+twin,logical_noise[depolarizing p=0.01 + readout q=0.02],-19.6561,-19.9103,-20.1343,-0.478175,-2.43271,0.246505,0.193813,0.295283,0.515961,True,16,3072,81920,1063.72
+opt,full_0.01,symmetry+twin,symmetry+twin,logical_noise[depolarizing p=0.01 + readout q=0.02],-19.6561,-19.9103,-19.2214,0.43475,2.21178,0.272892,0.21456,0.28946,0.484813,False,16,3072,49152,1182.33
+opt,full_0.01,readout+symmetry+twin,readout+symmetry+twin,logical_noise[depolarizing p=0.01 + readout q=0.02],-19.6561,-19.9103,-19.5907,0.0654033,0.332738,0.336409,0.2645,0.329,0.272466,False,16,3072,81920,1095.63
