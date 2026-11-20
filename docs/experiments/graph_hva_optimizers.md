@@ -24,7 +24,7 @@ Two conditions are separated:
 ## 2. System and conventions
 
 * **Primary lattice:** the PRB 105 2x6 rectangle (`kagome_bm_rectangle`, 2 x 6): 12 sites,
-  20 bonds, open boundaries; default dimer covering; `prb105` schedule. Exact ground energy
+  16 bonds, open boundaries; default dimer covering; `prb105` schedule. Exact ground energy
   `E0 = -19.910298`.
 * **Control:** the open 12-site star (`kagome_unit_cell`, 18 bonds, `E0 = -18`). Its ground
   state is a dimer product, i.e. the ansatz's reference state, so it is a regression check,

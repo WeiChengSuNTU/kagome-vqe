@@ -21,7 +21,7 @@ normalisation, `= 4 sum S.S`) on:
 | lattice (`[lattice] kind`) | description |
 |---|---|
 | `kagome_unit_cell` (default) | the open 12-site kagome star (18 bonds; exact ground energy -18, a dimer product) |
-| `kagome_bm_rectangle` | `rows x cols` open rectangles of Bosse & Montanaro (PRB 105), e.g. 2x6: 12 sites, 20 bonds |
+| `kagome_bm_rectangle` | `rows x cols` open rectangles of Bosse & Montanaro (PRB 105), e.g. 2x6: 12 sites, 16 bonds |
 | `kagome_kvqe20` | the 20-site open patch of Kattemolle & van Wezel (PRB 106) |
 | `kagome_patch` | the kagome sites of a `rows x cols` window of triangular-lattice coordinates, optionally with sites dropped |
 | `kagome_periodic` | `rows x cols` tori (periodic boundaries), e.g. 2x2 cells: 12 sites, 24 bonds |

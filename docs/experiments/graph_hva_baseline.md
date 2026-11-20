@@ -14,7 +14,7 @@ ansatz, not the optimiser. This is not an optimiser comparison; see
 * Hamiltonian `H = sum over bonds of J (XX + YY + ZZ)`, `J = 1` (Pauli normalisation,
   `= 4 sum S.S`); exact energies and ground spaces from exact diagonalisation.
 * Lattices: the open 12-site star (18 bonds), the PRB 105 2x6 rectangle (open, 12 sites,
-  20 bonds) and the periodic 12-site torus (`kagome_periodic`, 2x2 cells, 24 bonds). Different
+  16 bonds) and the periodic 12-site torus (`kagome_periodic`, 2x2 cells, 24 bonds). Different
   lattices have different Hamiltonians; compare rows only within a lattice.
 * Ansatz: singlets on the default dimer covering, then `p` cycles of exchange gates;
   `N_theta = p * N_b`, plus `p` with H0 (at the end of each cycle). Schedules: `greedy` for
