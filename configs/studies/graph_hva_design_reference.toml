@@ -1,4 +1,4 @@
-# HVA design follow-up, stage 1 (planned for after the 2026-11 group meeting; not yet run).
+# HVA design study, stage 1 (run 2026-11-21: results/20261121T132255Z-graph_hva_design_reference).
 # Question 1 of docs/research_overview.md: is p = 2, H0 off the right ansatz to carry through
 # the noisy studies? The original baseline (graph_hva_baseline.toml) answers the noise-free
 # side only with two seeds, no saved parameters and an evaluation cap that stopped p >= 3 and

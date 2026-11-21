@@ -1,4 +1,5 @@
-# HVA design follow-up, stage 2 (planned; not yet run). Needs the optima of
+# HVA design study, stage 2 (run 2026-11-21: results/20261121T135414Z-graph_hva_design_fixed_noise).
+# Needs the optima of
 # configs/studies/graph_hva_design_reference.toml. PRB 106 methodology as in
 # graph_hva_noise_fixed_prb106.toml: every (p, H0) optimum evaluated, not re-optimised, under
 # paper-layer depolarising noise, exact density matrices. With H0 on, each cycle has one more

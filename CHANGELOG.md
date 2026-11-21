@@ -13,9 +13,11 @@ All notable changes to this project are documented here. The format follows
   provenance of every results directory, comparability rules and the next experiments.
 - `benchmarks/geometry_survey.py` and `docs/experiments/data/geometry_survey.csv`: exact
   ground energies, gaps and coordination of the available kagome clusters.
-- `configs/studies/graph_hva_design_reference.toml` and
-  `configs/noise/graph_hva_design_fixed_noise.toml`: the planned depth / H0 study under noise
-  (configured, not run).
+- HVA design study: `configs/studies/graph_hva_design_reference.toml` (noise-free optima,
+  `p = 1-4`, H0 off/on, 3 seeds) and `configs/noise/graph_hva_design_fixed_noise.toml` (exact
+  layer-noise evaluation), `benchmarks/hva_design_report.py`; data and figure in
+  `docs/experiments/`. `p = 2` with H0 off has the lowest noisy fidelity of all `p >= 2`
+  ansatzes; H0 at `p = 2` matches `p = 3` in fidelity at `p_e = 1e-3`.
 - Removed the never-run full profiles `configs/studies/graph_hva_optimizer_full.toml` and
   `configs/studies/graph_hva_noise_opt_full.toml` (superseded; still in the history of their
   feature branches).

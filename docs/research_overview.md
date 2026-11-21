@@ -9,8 +9,8 @@ The studies were run in that order, but each one was planned after the previous 
 They therefore inherited choices (lattice, depth, H0 off) that were never re-examined. This
 document separates what the data establish from what is a single test. It records where
 every number comes from (Sec. 7) and lists the experiments still missing (Sec. 8). Every
-number is quoted from the linked write-up. Only the geometry table (Sec. 1) and the replay
-check (Sec. 7.3) were computed for this overview.
+number is quoted from the linked write-up. Three things were computed for this overview: the
+geometry table (Sec. 1), the HVA design study (Sec. 2.2) and the replay check (Sec. 7.3).
 
 Evidence labels used below:
 
@@ -27,15 +27,16 @@ on hardware.
 | stage | question | answer on the PRB 105 2x6 rectangle | evidence | source |
 |---|---|---|---|---|
 | geometry | which cluster? | the 2x6 rectangle was taken as PRB 105's benchmark and because it fits square-grid and heavy-hex devices; it is boundary-dominated (3 of 12 sites fully coordinated) with a large gap (3.85 %) | geometry exact; physical representativeness a gap | Sec. 1 |
-| HVA | depth, H0? | without noise, error falls with `p` (7.2 % → 0.05 % for `p = 1 → 4`); H0 helps at small `p` (`p = 2`: F 0.98 vs 0.76). Every later study used `p = 2`, H0 off | noise-free: limited (2 seeds, capped); under noise: gap for H0 | Sec. 2 |
+| HVA | depth, H0? | `p = 2`, H0 off (used in every noisy study) has the lowest fidelity of all `p ≥ 2` ansatzes under layer noise; H0 at `p = 2` gives F 0.80 vs 0.66 at `p_e = 1e-3` (≈ `p = 3`), but unmitigated energy does not improve (4.50 vs 4.26 %) because the extra layers add bias | established (exact, 3 seeds); mitigated ranking: gap | Sec. 2 |
 | optimiser | which one? | without noise L-BFGS-B is best; under shots and layer noise, SPSA with a step cap ≈ ADAM + SPSA; at equal shots under compiled noise (2x5), plain parameter-shift GD is not beaten | limited (3 seeds, one budget each) | Sec. 3 |
 | noise | what does noise do? | PRB 106 layer noise: `F ≈ (1 - p_e)^(nd) F0` holds; the bias is almost parameter-independent, so the gradient direction is kept (cos ≥ 0.997). Compiled device noise does turn the gradient (cos 0.17-0.98, device-dependent) | established (exact) | Sec. 4 |
 | mitigation | what does QEM fix? | readout + symmetry removes the layer-noise bias at no cost (`p_e = 1e-3`); + twin up to `1e-2`. Mitigation fixes the **reported energy**, not **where the optimiser goes** | established (fixed parameters, exact limits); optimisation: limited | Sec. 5 |
 | PIDN | does the surrogate help? | no: Stage I labels are shot-noise dominated, and even exact labels give only a 5-step horizon before closed-loop drift; no variant beats GD at equal cost | established for this system and noise | Sec. 6 |
 
 The headline is negative for PIDN, but it is specific to the HVA design, lattice and noise used.
-The two most important open items are therefore the ansatz (Sec. 2.4) and the geometry
-(Sec. 1.3), not PIDN itself.
+The HVA design study (Sec. 2.2, run for this overview) shows the ansatz carried through every
+noisy study was not the best choice under noise. The open items are the ansatz choice after
+mitigation (Sec. 2.4) and the geometry (Sec. 1.3), not PIDN itself.
 
 ## 1. Kagome geometry
 
@@ -101,51 +102,76 @@ What the table shows:
 ### 2.1 Ansatz
 
 `graph_hva`: singlets on a dimer covering, then `p` cycles of exchange gates
-`G(theta) = exp(-i theta/2 (XX + YY + ZZ))`, one parameter per gate (one parameter per gate,
-OPG). The optional H0 block is one exchange gate on every dimer per cycle, sharing one
+`G(theta) = exp(-i theta/2 (XX + YY + ZZ))`, one parameter per gate (OPG). The optional H0 block is one exchange gate on every dimer per cycle, sharing one
 parameter. On the 2x6 rectangle the schedule has 5 layers. Details:
 [`graph_hva.md`](graph_hva.md).
 
-### 2.2 Depth and H0: what is known
+### 2.2 Depth and H0: measured (HVA design study, 2026-11-21)
 
-Noise-free values: best of two L-BFGS-B seeds from the baseline
-([`experiments/graph_hva_baseline.md`](experiments/graph_hva_baseline.md)). **All `p ≥ 3` runs and
-the `p = 2` H0 runs were stopped by scipy's 15,000-evaluation cap**, so those errors are upper
-bounds. Cost columns: exchange gates per circuit; CX = 3 per exchange gate + 6 for the singlets
-(the minimum for this gate, before routing); `d` = noise layers per qubit in the PRB 106 model
-(`n d` locations with `n = 12`). The last column is the PRB 106 estimate
-`F ≈ (1 - p_e)^(n d) F0` at `p_e = 1e-3`; it was **measured** only for H0 off.
+Stage 1, `configs/studies/graph_hva_design_reference.toml`: noise-free L-BFGS-B optima, 3 seeds,
+equal budget of 10,000 statevector evaluations, parameters saved. Every `p ≥ 3` run and every H0
+run at `p ≥ 2` used the whole budget, so those errors are upper bounds.
 
-| `p` | H0 | parameters | exchange gates | CX (min) | `d` | noise-free rel. error | `F0` | `F` at `p_e = 1e-3`: measured (Eq. 9 estimate) |
-|---|---|---|---|---|---|---|---|---|
-| 1 | off | 16 | 16 | 54 | 6 | 7.19e-2 | 0.511 | 0.474 (0.475) |
-| 1 | on | 17 | 22 | 72 | 7 | 2.29e-2 | 0.707 | - (0.650) |
-| 2 | **off** | 32 | 32 | 102 | 11 | 1.26e-2 | 0.756 | 0.653 (0.662) |
-| 2 | on | 34 | 44 | 138 | 13 | 6.48e-3 | 0.979 | - (0.838) |
-| 3 | off | 48 | 48 | 150 | 16 | 1.65e-3 | 0.996 | 0.819 (0.822) |
-| 3 | on | 51 | 66 | 204 | 19 | 6.89e-4 | 0.998 | - (0.795) |
-| 4 | off | 64 | 64 | 198 | 21 | 4.87e-4 | 0.999 | - (0.776) |
-| 4 | on | 68 | 88 | 270 | 25 | 5.07e-4 | 0.999 | - (0.740) |
+Stage 2, `configs/noise/graph_hva_design_fixed_noise.toml`: each optimum evaluated (not
+re-optimised) under PRB 106 depolarising layer noise, exact density matrices.
 
-(Measured `F` at `1e-3`: exact density matrices at the L-BFGS-B optima of the noise study, mean
-over seeds, [`experiments/graph_hva_noise.md`](experiments/graph_hva_noise.md), Sec. 5; Eq. 9
-matched the simulation to within 1 % at `p_e ≤ 1e-3` there. The estimate uses the baseline
-`F0`, so it differs slightly from the measured row.)
+Data: [`experiments/data/graph_hva_design_reference_runs.csv`](experiments/data/graph_hva_design_reference_runs.csv),
+[`experiments/data/graph_hva_design_fixed_noise_points.csv`](experiments/data/graph_hva_design_fixed_noise_points.csv).
 
-Readings:
+Medians over seeds. Cost columns:
+* exchange gates per circuit;
+* CX = 3 per exchange gate + 6 for the singlets (the minimum for this gate, before routing);
+* `d` = noise layers per qubit in the PRB 106 model (`n d` locations with `n = 12`).
 
-* Without noise, depth wins: `p = 3` is near exact. With layer noise, **depth costs fidelity**:
-  at `p_e = 1e-3` the measured noisy energy of `p = 3` is already worse than that of `p = 2`
-  (H0 off), and at `1e-2` `p = 1` is best (noise study, Sec. 5). The best depth depends on the
-  noise.
-* **H0 on at `p = 2` is the untested candidate.** It costs 2 more parameters, 12 more gates and
-  2 more noise layers. By Eq. 9 it would keep `F ≈ 0.84` at `p_e = 1e-3`, against 0.65 for the
-  `p = 2`, H0-off ansatz used everywhere, and about as much as `p = 3` (0.82). This is an
-  estimate from noise-free fidelities, not a measurement.
-* **Per-layer sharing** (10 instead of 32 parameters at `p = 2`) costs expressibility: noise-free
-  optimum 2.27 % (`p = 2`), 1.69 % (`p = 3`), 1.42 % (`p = 4`), against 1.28 % and 0.25 % per gate
-  at `p = 2, 3`. Established, exact, 3 seeds
-  ([`experiments/graph_hva_pidn_next.md`](experiments/graph_hva_pidn_next.md), Sec. 4).
+| `p` | H0 | parameters | exchange gates | CX (min) | `d` | noise-free error | `F0` | noisy `F` at `p_e` = 1e-4 / 3e-4 / 1e-3 | noisy energy error at `p_e` = 1e-4 / 3e-4 / 1e-3 |
+|---|---|---|---|---|---|---|---|---|---|
+| 1 | off | 16 | 16 | 54 | 6 | 7.19 % | 0.509 | 0.505 / 0.498 / 0.474 | 7.34 / 7.64 / 8.68 % |
+| 1 | on | 17 | 22 | 72 | 7 | 2.29 % | 0.707 | 0.701 / 0.689 / 0.650 | 2.47 / 2.83 / **4.06 %** |
+| 2 | **off (used so far)** | 32 | 32 | 102 | 11 | 1.26 % | 0.749 | 0.739 / 0.720 / 0.657 | 1.56 / 2.17 / 4.26 % |
+| 2 | on | 34 | 44 | 138 | 13 | 0.84 % | 0.939 | 0.924 / 0.896 / 0.803 | 1.21 / 1.95 / 4.50 % |
+| 3 | off | 48 | 48 | 150 | 16 | 0.25 % | 0.992 | 0.973 / **0.937** / **0.819** | 0.69 / **1.57** / 4.57 % |
+| 3 | on | 51 | 66 | 204 | 19 | 0.084 % | 0.998 | **0.975** / 0.932 / 0.795 | **0.59** / 1.60 / 5.03 % |
+| 4 | off | 64 | 64 | 198 | 21 | 0.073 % | 0.998 | 0.973 / 0.925 / 0.777 | 0.62 / 1.73 / 5.51 % |
+| 4 | on | 68 | 88 | 270 | 25 | 0.060 % | 0.998 | 0.969 / 0.912 / 0.741 | 0.71 / 2.01 / 6.42 % |
+
+(Seed spread: `p = 2` with H0 has `F0` 0.938 / 0.938 / 0.978; every other cell spreads by
+≤ 0.01 in `F0`, apart from one `p = 4` H0 seed. Eq. 9 holds again: exact over estimated
+infidelity is 0.995-1.000 in all 72 points, and the exact fidelity lies inside the trajectory
+estimator's 95 % interval in 66 of them. First excited level: 3.85 % above `E0`.)
+
+![HVA design under layer noise](experiments/figures/hva_design_noise.png)
+
+What the data show:
+
+* **Without noise:**
+  * H0 at `p = 2` lowers the error from 1.26 % to 0.84 % and raises `F0` from 0.75 to 0.94.
+  * `p ≥ 3` is near exact with or without H0.
+* **Fidelity under noise:** `p = 2` with H0 off, the ansatz carried through every noisy study,
+  has the lowest fidelity of all `p ≥ 2` ansatzes at every noise level.
+  * At `p_e = 1e-3`: H0 on at `p = 2` gives 0.80 against 0.66, the same level as `p = 3` with
+    H0 off (0.82).
+  * The earlier Eq. 9 estimate (0.84) used the best baseline seed. The measured seeds give
+    0.80-0.84.
+* **Unmitigated energy ranks differently**, because each extra noise location adds bias.
+  * At `1e-4` deeper is better (best: `p = 3` with H0, 0.59 %).
+  * At `1e-3` every `p ≥ 2` ansatz is at 4.3-6.4 %, and `p = 2` with H0 (4.50 %) is slightly
+    *worse* than without (4.26 %). The best is the shallow `p = 1` with H0 (4.06 %).
+  * At `1e-3` no ansatz gets below the first excited level (3.85 %).
+* **The best depth falls with noise:** `p = 3` (with or without H0) at `1e-4`, `p = 3` with
+  H0 off at `3e-4`, and at `1e-3` `p = 2` with H0 or `p = 3` by fidelity, `p ≤ 2` by
+  unmitigated energy.
+
+Interpretation (not yet tested): at `1e-3` the energy ranking is set by the noise bias, which
+readout + symmetry removes almost completely on this model (Sec. 5). After mitigation the
+energy ranking should therefore move towards the fidelity ranking, favouring `p = 2` with H0 or
+`p = 3` with H0 off over the `p = 2`, H0-off ansatz used so far. `p = 2` with H0 is the cheaper of
+the two:
+* 34 vs 48 parameters;
+* 88 vs 96 energies per parameter-shift gradient;
+* 138 vs 150 CX.
+
+Per-layer sharing (10 parameters at `p = 2`, PIDN-next test B) costs expressibility:
+noise-free optimum 2.27 % (`p = 2`), 1.69 % (`p = 3`), 1.42 % (`p = 4`).
 
 ### 2.3 Why `p = 2`, H0 off was used throughout (reconstructed from the record)
 
@@ -157,14 +183,19 @@ Readings:
    noise reused the optimiser study's optima, ZNE-GD followed, and PIDN trained on the ZNE-GD
    trajectories. The setting was carried forward for continuity. **It was never chosen as the
    best ansatz under noise.**
-4. The noise study supports `p ≤ 2` at `p_e = 1e-3`, but only among H0-off ansatzes.
+4. The noise study supported `p ≤ 2` at `p_e = 1e-3` by unmitigated energy, among H0-off
+   ansatzes only. By fidelity, `p = 2` with H0 off is the worst `p ≥ 2` choice (Sec. 2.2).
 
 ### 2.4 Status
 
-* **Limited:** the noise-free depth/H0 table (two seeds, evaluation-capped, no saved
-  parameters for H0 on).
-* **Gap (highest priority):** noise robustness, gate count and optimisation cost of H0 on, and
-  of `p = 3`, under the same noise. Configured, not run (Sec. 8, item 1).
+* **Established** (exact noisy values, 3 seeds, equal budget): `p = 2` with H0 off is
+  dominated by fidelity; H0 at `p = 2` reaches `p = 3`'s fidelity at `p_e = 1e-3` with fewer
+  parameters and gates. The noise-free optima at `p ≥ 3` and with H0 are budget-limited.
+* **Gap:**
+  * the *mitigated* energy ranking of these optima (readout + symmetry, Sec. 8 item 1), which
+    decides between `p = 2` with H0 and `p = 3`;
+  * the same comparison under compiled noise;
+  * optimisation under noise with the new ansatz.
 
 ## 3. Optimiser
 
@@ -342,6 +373,7 @@ afterwards, together with its write-up. The last column gives that commit. Scrip
 | A: gradient direction (pidn_next 3) | `benchmarks/noise_direction.py` | 2x6 | 1-3 optima, 2 GD points, off | layer `1e-3`; Nighthawk, Kingston, Guadalupe | exact | - | 1-3 | `20261117T124800Z-noise_direction` | not recorded → 5abd923 |
 | B: per-layer sharing (pidn_next 4) | `studies/graph_hva_per_layer_{reference,gd}.toml`, `benchmarks/pidn_per_layer_openloop.py` | 2x6 | 2-4 per layer, off | none; dep `1e-3` + readout 0.02, readout + symmetry | 1024 | 10,000 evaluations; 60 iterations | 1-3 | `20261117T064315Z-…_per_layer_{reference,gd}`, `20261117T081646Z-…_openloop` | 440ca93 dirty → 5abd923 |
 | C: equal-shot optimisers (pidn_next 5) | `benchmarks/pidn_next_optimizers.py` | **2x5** | 2, off | FakeKingston best hexagon, readout + symmetry | 1024 | 10,263 circuits | 1-3 | `20261117T124800Z-graph_hva_pidn_next_c` | not recorded → 5abd923 |
+| HVA design study (this document, Sec. 2.2) | `studies/graph_hva_design_reference.toml`, `noise/graph_hva_design_fixed_noise.toml`, `benchmarks/hva_design_report.py` | 2x6 | 1-4, off/on | none; layer dep `1e-4`, `3e-4`, `1e-3`, exact | - | 10,000 evaluations | 1-3 | `20261121T132255Z-graph_hva_design_reference`, `20261121T135414Z-graph_hva_design_fixed_noise` | 0dc1c37 (dirty only in the user's uncommitted `pyproject.toml` / `uv.lock`, which add an unused optional `torch` dependency) |
 | geometry survey (this document, Sec. 1) | `benchmarks/geometry_survey.py` | six clusters | - | none | - | - | - | `results/geometry_survey_20261121/` | this branch |
 
 ### 7.3 Replay check
@@ -366,8 +398,10 @@ Do not compare numbers across these lines without saying so:
 * **Different budgets:** 3000 exact energies (noise-free studies), 4.6 M shots (optimiser and
   noisy-optimiser studies, M2 SPSA), 12 M shots (ZNE-GD, M2 GD), 10,263 circuits (C). In the M2
   optimisation table, GD had 12.0 M shots and SPSA 4.65 M shots.
-* **Different `p = 3` sources:** baseline 0.165 % (capped at 15,000 evaluations, 2 seeds) and
-  noise reference 0.25 % (10,000 evaluations).
+* **Different noise-free references:** the baseline (2 seeds, capped at 15,000 evaluations, no
+  saved parameters) and the HVA design study (3 seeds, 10,000 evaluations) differ in budget;
+  e.g. `p = 3`: 0.165 % (baseline best) vs 0.25 % (design study, median). Use the design study
+  for `(p, H0)` comparisons.
 * **Different metrics:** the noise-free error of the returned parameters (the parameter quality
   used everywhere) is not the measured energy (which includes noise bias and shot noise).
 * **Different noise modes:** paper-layer `p_e` and compiled device models answer different
@@ -384,17 +418,14 @@ Limitations common to all studies:
 * hyperparameters from single pilot seeds;
 * simulation only.
 
-Planned next steps, in order. Nothing here has been run yet.
+Planned next steps, in order.
 
-1. **HVA design under noise (highest priority; about 1.5 CPU-hours).**
-   * Stage 1: `configs/studies/graph_hva_design_reference.toml`: noise-free optima for
-     `p = 1-4`, H0 off/on, 3 seeds, 10,000 evaluations each, parameters saved. The dry run
-     estimates 24 runs, 1.2 h.
-   * Stage 2: `configs/noise/graph_hva_design_fixed_noise.toml`: those optima under layer
-     noise `1e-4`, `3e-4`, `1e-3`, exact density matrices.
-   * This tests the Eq. 9 prediction of Sec. 2.2 (H0 on at `p = 2` keeping `F ≈ 0.84` against
-     0.65) and fixes the ansatz for everything after it. Add gate counts after routing for the
-     chosen mapping.
+1. **Choose the ansatz after mitigation (highest priority; cheap).** The HVA design study is
+   done (Sec. 2.2). Next, evaluate its optima with readout + symmetry (and readout + symmetry
+   + twin) in the infinite-shot limit (`benchmarks/m2_exact_limits.py` method) at
+   `p_e = 1e-3` + readout 0.02. Then choose between `p = 2` with H0 and `p = 3` with H0 off, and
+   rerun the key noisy results (optimiser comparison, M2 optimisation) at that ansatz. Optimise
+   the H0 optima further (they used the full 10,000 evaluations).
 2. **Optimiser comparison at the chosen ansatz:** equal shots, five seeds, GD, capped SPSA,
    ADAM + SPSA, under one layer-noise level and one compiled model.
 3. **Geometry:** VQE noise-free on the 2x3 torus and the 20-site patch (statevector), the
