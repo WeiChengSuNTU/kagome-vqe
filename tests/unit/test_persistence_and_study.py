@@ -378,7 +378,7 @@ def test_shipped_study_profiles_validate() -> None:
         sizes[path.stem] = len(load_study_config(path).runs())
     assert sizes["graph_hva_optimizer_smoke"] == 5
     assert sizes["graph_hva_baseline"] == 36
-    assert sizes["graph_hva_optimizer_full"] >= 5 * 3 * 3  # >= 5 seeds per comparison group
+    assert sizes["graph_hva_design_reference"] == 4 * 2 * 3  # p = 1-4, H0 off/on, 3 seeds
 
 
 # -- command line -----------------------------------------------------------------------------

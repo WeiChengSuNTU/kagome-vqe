@@ -231,6 +231,11 @@ uv run kagome-vqe benchmark configs/m2_mitigation.toml --point 0 --repeats 8
 
 ## Experiments
 
+**Start with [`docs/research_overview.md`](docs/research_overview.md)**: the `graph_hva` studies
+as one line of argument (kagome geometry → HVA → optimiser → noise → error mitigation → PIDN →
+limitations), what each result establishes, the provenance of every result, comparability
+rules and the planned next experiments.
+
 Detailed experiment write-ups (goals, configuration, budgets, seeds, results, reproduction
 commands, interpretation, limitations):
 
@@ -238,9 +243,9 @@ commands, interpretation, limitations):
 |---|---|---|
 | [`docs/experiments/legacy_m0_m1_m2.md`](docs/experiments/legacy_m0_m1_m2.md) | 12-site star, legacy ring ansatzes: exact and noisy FakeGuadalupeV2 benchmarks (M0), gradient comparison (M1), error mitigation (M2) | completed |
 | [`docs/experiments/graph_hva_baseline.md`](docs/experiments/graph_hva_baseline.md) | `graph_hva` with L-BFGS-B on the star, the PRB 105 2x6 rectangle and the 12-site torus, `p = 1-4`, with and without H0 | completed (2 seeds) |
-| [`docs/experiments/graph_hva_optimizers.md`](docs/experiments/graph_hva_optimizers.md) | L-BFGS-B vs calibrated SPSA vs ADAM + SPSA gradient for `graph_hva`, noiseless and finite-shot, equal budgets | smoke and limited comparison completed; full profile configured, not yet run |
+| [`docs/experiments/graph_hva_optimizers.md`](docs/experiments/graph_hva_optimizers.md) | L-BFGS-B vs calibrated SPSA vs ADAM + SPSA gradient for `graph_hva`, noiseless and finite-shot, equal budgets | smoke and limited comparison completed; full profile never run (removed) |
 | [`docs/experiments/graph_hva_noise.md`](docs/experiments/graph_hva_noise.md) | PRB 106 noise models and the fixed-parameter noise analysis (noise-free optima under local depolarising / bit-flip noise, Eq. 9 check), compiled-hardware noise kept separate | reproduction of the PRB 106 methodology on the 2x6 rectangle completed |
-| [`docs/experiments/graph_hva_noisy_optimizers.md`](docs/experiments/graph_hva_noisy_optimizers.md) | calibrated SPSA (with and without step control) vs ADAM + SPSA gradient under paper-layer noise, equal shot budgets, noise-free parameter quality, transfer of noise-free optima | new (not in PRB 106); smoke, pilot and limited comparison completed; full profile configured, not yet run |
+| [`docs/experiments/graph_hva_noisy_optimizers.md`](docs/experiments/graph_hva_noisy_optimizers.md) | calibrated SPSA (with and without step control) vs ADAM + SPSA gradient under paper-layer noise, equal shot budgets, noise-free parameter quality, transfer of noise-free optima | new (not in PRB 106); smoke, pilot and limited comparison completed; full profile never run (removed) |
 | [`docs/experiments/graph_hva_mitigation.md`](docs/experiments/graph_hva_mitigation.md) | ZNE on paper-layer noise (probability scaling, layer folding): fixed-parameter bias / variance / rmse from exact density matrices; parameter-shift gradient descent with and without ZNE; trajectory records for surrogate models | fixed-parameter characterisation and limited GD comparison completed |
 | [`docs/experiments/graph_hva_m2_mitigation.md`](docs/experiments/graph_hva_m2_mitigation.md) | the M2 comparison (readout correction, symmetry filtering, ZNE, twin rescaling, combined) for `graph_hva` on paper-layer noise with readout error, fixed parameters | completed |
 | [`docs/experiments/graph_hva_pidn.md`](docs/experiments/graph_hva_pidn.md) | PIDN (physics-informed denoising network) surrogate of ZNE gradient descent: design choices the paper leaves open, ablations, non-neural baselines, closed- and open-loop tests with noisy and noise-free training data | limited comparison completed (3 seeds); no speed-up on this problem |

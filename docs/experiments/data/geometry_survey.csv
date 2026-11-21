@@ -1,0 +1,7 @@
+cluster,sites,bonds,boundary,bonds_per_site,degree_4_sites,degree_lt4_sites,triangles,E0,E0_per_bond,E0_per_site_SS,ground_degeneracy_in_lowest8,gap_to_next_level,relative_gap,lanczos_s
+star12 (IBM 2022 unit cell),12,18,open,1.5,6,6,6,-18.0,-1.0,-0.375,2,1.0387,0.0577,0.1
+bm2x5 (PRB 105 rectangle),10,14,open,1.4,3,7,4,-15.61069,-1.115,-0.3903,1,0.1562,0.01,0.0
+bm2x6 (PRB 105 rectangle),12,16,open,1.333,3,9,4,-19.910298,-1.2444,-0.4148,1,0.7662,0.0385,0.1
+kvqe20 (PRB 106 patch),20,30,open,1.5,5,15,7,-35.371858,-1.1791,-0.4421,1,0.2321,0.0066,59.2
+torus 2x2 (12-site PBC),12,24,periodic,2.0,12,0,8,-21.779501,-0.9075,-0.4537,1,0.4659,0.0214,0.1
+torus 2x3 (18-site PBC),18,36,periodic,2.0,18,0,12,-32.193083,-0.8943,-0.4471,1,0.1343,0.0042,8.2

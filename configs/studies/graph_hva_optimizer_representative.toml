@@ -1,6 +1,6 @@
 # Limited representative optimiser comparison, executed during development (see
-# docs/experiments/graph_hva_optimizers.md for its results). A subset of the full profile:
-# p = 1, 2 without H0, three seeds, smaller budgets. About 25 minutes on 8 cores.
+# docs/experiments/graph_hva_optimizers.md for its results): p = 1, 2 without H0, three
+# seeds. About 25 minutes on 8 cores.
 #
 #   uv run kagome-vqe study configs/studies/graph_hva_optimizer_representative.toml
 #   (interrupt any time; continue with --resume results/<timestamp>-graph_hva_opt_repr)

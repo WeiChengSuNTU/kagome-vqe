@@ -2,8 +2,8 @@
 
 Status (2026-11-12): smoke profile, a seed-101 step-control pilot and a **limited**
 representative comparison (PRB 105 2x6 rectangle, `p = 2`, three seeds) are done; the full
-research profile is configured and costed but **not run**. Nothing here is a general ranking
-of optimisers.
+research profile was configured but **never run** (removed, Sec. 8). Nothing here is a general
+ranking of optimisers.
 
 This study is **new**: PRB 106 optimises without noise and only evaluates fixed parameters
 under noise ([`graph_hva_noise.md`](graph_hva_noise.md)); it does not study optimisation under
@@ -210,17 +210,14 @@ measures the budget as much as the noise.
 * The ADAM-vs-SPSA ranking depends on the channel here (bit flip vs depolarising); with three
   seeds this may be noise in the comparison itself.
 
-## 8. Full research profile (configured, not run)
+## 8. Full research profile (planned, never run; removed)
 
-[`configs/studies/graph_hva_noise_opt_full.toml`](../../configs/studies/graph_hva_noise_opt_full.toml):
-`p = 2, 3`, H0 off and on, seeds 1-5, backends sv (10,000 energies), shots1024, depolarising
-`p_e = 1e-4, 3e-4, 1e-3`, bit flip `1e-3` (9,216,000 shots each), optimisers spsa_cal,
-spsa_cap0.2, adam_spsa and L-BFGS-B (sv). 380 runs, 1.7 M energies, 2.76 G shots. The timed dry
-run (single process, measured on the shared machine while other jobs ran, so an upper bound)
-estimates **68 CPU-hours**; per `p` and backend (hours): `p = 2`: bf 7.0, dep 1e-3 8.1,
-dep 3e-4 1.9, dep 1e-4 0.7, shots 1.7, sv 1.7; `p = 3`: bf 17.2, dep 1e-3 15.9, dep 3e-4 3.5,
-dep 1e-4 1.2, shots 2.0, sv 2.4. Run it in bounded, resumable chunks, several processes with
-disjoint `--only` filters and `--no-summary`, then `study-summary`.
+A 380-run profile (`p = 2, 3`, H0 off and on, seeds 1-5, four noise levels, about 68
+CPU-hours) was configured here but never run. It was removed on
+`research/group-meeting-2026-11`; the questions it would have answered are re-planned in
+[`../research_overview.md`](../research_overview.md), Sec. 8 (the H0 / depth question first,
+by the cheap fixed-parameter route). The file is in the history of
+`feature/graph-hva-noise-study` (`configs/studies/graph_hva_noise_opt_full.toml`).
 
 ## 9. Reproduction
 
@@ -252,8 +249,8 @@ manifest records the retries. Only completed runs enter the summary.
 
 ## 11. Recommended next experiments before error mitigation
 
-1. Run the full profile (at least the `p = 2` and `p = 3`, H0-off cells of every backend) to
-   test the transfer finding and the cap with five seeds.
+1. Test the transfer finding and the cap with five seeds at `p = 2` and `p = 3` (the full
+   profile planned for this was never run; Sec. 8).
 2. Add a stronger noise level (`p_e = 3e-3`) where the noise bias might become parameter
    dependent, and a small `aer_noisy` fixed-parameter comparison to see how the compiled
    circuit's noise compares with the paper-layer model.

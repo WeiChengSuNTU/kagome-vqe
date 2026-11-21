@@ -6,6 +6,21 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Research overview (branch `research/group-meeting-2026-11`)
+
+- `docs/research_overview.md`: the `graph_hva` studies as one line of argument (geometry → HVA
+  → optimiser → noise → mitigation → PIDN → limitations), evidence labels, branch integration,
+  provenance of every results directory, comparability rules and the next experiments.
+- `benchmarks/geometry_survey.py` and `docs/experiments/data/geometry_survey.csv`: exact
+  ground energies, gaps and coordination of the available kagome clusters.
+- `configs/studies/graph_hva_design_reference.toml` and
+  `configs/noise/graph_hva_design_fixed_noise.toml`: the planned depth / H0 study under noise
+  (configured, not run).
+- Removed the never-run full profiles `configs/studies/graph_hva_optimizer_full.toml` and
+  `configs/studies/graph_hva_noise_opt_full.toml` (superseded; still in the history of their
+  feature branches).
+- Added `docs/ibm_runtime_audit.md` from `ibm-hardware-results`.
+
 ### Changed
 
 - `graph_hva` with `gradient = "parameter_shift"` now uses the exchange-gate rule: 2 energies per

@@ -1,0 +1,25 @@
+# HVA design follow-up, stage 2 (planned; not yet run). Needs the optima of
+# configs/studies/graph_hva_design_reference.toml. PRB 106 methodology as in
+# graph_hva_noise_fixed_prb106.toml: every (p, H0) optimum evaluated, not re-optimised, under
+# paper-layer depolarising noise, exact density matrices. With H0 on, each cycle has one more
+# noise layer (d = 6 p + 1 instead of 5 p + 1), so the comparison charges H0 for its depth.
+#
+#   uv run kagome-vqe noise-analysis configs/noise/graph_hva_design_fixed_noise.toml --dry-run
+#   uv run kagome-vqe noise-analysis configs/noise/graph_hva_design_fixed_noise.toml
+name = "graph_hva_design_fixed_noise"
+description = """
+Noise robustness of graph_hva depth and H0 on the PRB 105 2x6 rectangle: noise-free optima for
+p = 1-4, H0 off and on, seeds 1-3, under paper-layer depolarising noise p_e = 1e-4, 3e-4, 1e-3
+(exact density matrices; the trajectory estimator as a cross-check).
+"""
+runs = [
+  "results/*-graph_hva_design_reference/runs/*-graph_hva_design_reference-bm2x6-p*-sv-lbfgsb-s[123]",
+]
+channels = ["depolarizing"]
+probabilities = [1e-4, 3e-4, 1e-3]
+exact = true
+expected_error_trajectories = 1024
+min_trajectories = 1024
+shots = 1024
+bootstrap = 2000
+seed = 1

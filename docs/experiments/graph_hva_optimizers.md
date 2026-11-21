@@ -1,8 +1,8 @@
 # graph_hva optimiser study: L-BFGS-B, calibrated SPSA, ADAM + SPSA gradient
 
 Status (2026-11-11): infrastructure, smoke profile, hyperparameter pilot and a **limited**
-representative comparison are done; the full research profile is configured and costed but
-**not yet run**. Nothing below is a general ranking of optimisers.
+representative comparison are done; the full research profile was configured but **never run**
+(removed, Sec. 8). Nothing below is a general ranking of optimisers.
 
 ## 1. Question
 
@@ -33,7 +33,7 @@ Two conditions are separated:
 * **Hamiltonian:** `H = sum over bonds of (XX + YY + ZZ)` (Pauli normalisation, `= 4 sum S.S`)
   for every run; references from exact diagonalisation.
 * **Ansatz:** `graph_hva`, one parameter per gate, H0 off in the main comparison (so every
-  optimiser optimises the identical circuit), on as a secondary arm in the full profile.
+  optimiser optimises the identical circuit); H0 on was not tested here.
 * **Initial point:** `x0` uniform in `[0, 0.1)` from the seed (`vqe.initial_point`): the
   same vector for every optimiser of a seed. Small angles keep the start near the dimer state.
 
@@ -47,9 +47,7 @@ run's `result.json` (`metadata.optimizer.gradient`).
 |---|---|---|---|
 | `lbfgsb` | scipy L-BFGS-B (`ScipyOptimizer`), 2-point finite differences, `eps = 1e-8` | `n + 1` per gradient plus line search | `maxiter` and `maxfun` effectively unlimited: the budget stops it |
 | `spsa_cal` | `Spsa(calibrate=True)`: Spall gains `a / (k + A)^0.602`, `c / k^0.101`, `A = 0.1 maxiter`; `a` calibrated from 25 gradient probes (50 energies, counted) so the first step has norm `target_magnitude` | 2 | `c = 0.1`, `target_magnitude = 0.2` |
-| `spsa_cal_default` | as `spsa_cal` with the library default `target_magnitude = 2 pi / 10` | 2 | full profile only, sensitivity arm |
 | `adam_spsa` | `Adam` with the `SimultaneousPerturbation` gradient estimator (not ADAM's default forward difference) | 2 | `lr = 0.02`, `c = 0.1`, `beta1 = 0.9`, `beta2 = 0.99` |
-| `lbfgsb_fd0.1` | L-BFGS-B with `eps = 0.1` | `n + 1` + line search | full profile, finite shots only; diagnostic |
 
 For SPSA and ADAM + SPSA, `maxiter` is derived from the budget (`fit_maxiter_to_budget`) so
 that calibration, iterations and the final evaluation use exactly the budget; their gain
@@ -174,8 +172,8 @@ Aggregated over the three seeds (noise-free values of the final parameters):
    normalised steps stayed at or below 0.11 rad and shrank monotonically. Hence at budgets
    below about 1000 evaluations (about 3 M shots here) ADAM + SPSA's iterates are better.
 5. **Success rate is uninformative at p <= 2:** no run, by any optimiser, reached the 1 %
-   threshold, because the ansatz cannot at this depth (best 1.26e-2 at p = 2). The full
-   profile's `p = 3` (baseline best 1.65e-3) is where it can discriminate.
+   threshold, because the ansatz cannot at this depth (best 1.26e-2 at p = 2). `p = 3`
+   (baseline best 1.65e-3) is where it could discriminate.
 6. **Time is dominated by energy evaluations.** Optimiser time per evaluation: statevector
    about 6 ms (`p = 1`) and 10 ms (`p = 2`) for the SPSA-type methods, 9 to 13 ms for
    L-BFGS-B (its own bookkeeping); 1024-shot `aer_ideal` 55 to 61 ms for both SPSA-type
@@ -193,25 +191,16 @@ Aggregated over the three seeds (noise-free values of the final parameters):
 * The excursion suggests calibrating where the gradient is representative, clipping or
   blocking SPSA steps, or a larger stability constant `A`; none of these was tested.
 
-## 8. Full research profile (configured, not run)
+## 8. Full research profile (planned, never run; removed)
 
-`configs/studies/graph_hva_optimizer_full.toml`: 280 runs.
-
-* 2x6 rectangle, `p = 1, 2, 3`, H0 off and on, **seeds 1-5**: statevector (`lbfgsb`,
-  `spsa_cal`, `spsa_cal_default`, `adam_spsa`; 10,000 evaluations each) and `aer_ideal` with
-  1024 shots (`spsa_cal`, `adam_spsa`, diagnostic `lbfgsb_fd0.1`; 15,360,000 shots each).
-* Star control, `p = 1`, same optimisers and seeds.
-
-`--dry-run` on 2026-11-11 (8 threads, timing 5 probe evaluations per configuration) estimates
-**about 17 hours sequentially as an upper bound**: 2x6 statevector 5.4 h, 2x6 finite shots
-7.7 h, star control 3.8 h; 2.2 million evaluations and 1.84 billion shots in total. The
-estimate assumes every run spends its full budget; L-BFGS-B often converges earlier; the
-noise-free tracking for the figures adds classical time on top.
-
-Recommended way to run it: in two-hour chunks with `--time-limit 120` and `--resume`, one
-experiment at a time (`--only sv`, then `--only shots1024`), with `OMP_NUM_THREADS` set and
-nothing else on the machine if wall times are to be compared. Check `--dry-run` first after
-any change; consider `--only bm2x6` to skip the control once it has passed for one seed.
+A 280-run profile (`p = 1, 2, 3`, H0 off and on, seeds 1-5, about 17 CPU-hours) was configured
+here but never run. It was removed on `research/group-meeting-2026-11`: later studies changed
+which optimisers are worth comparing (the step-capped SPSA of
+[`graph_hva_noisy_optimizers.md`](graph_hva_noisy_optimizers.md), parameter-shift gradient
+descent of [`graph_hva_mitigation.md`](graph_hva_mitigation.md)), and the H0 / depth question
+is now a separate follow-up
+([`../research_overview.md`](../research_overview.md), Sec. 8). The file is in the history of
+`feature/graph-hva-optimizer-study` (`configs/studies/graph_hva_optimizer_full.toml`).
 
 ## 9. Reproduction
 
@@ -223,11 +212,6 @@ uv run kagome-vqe study configs/studies/graph_hva_optimizer_pilot.toml
 # limited comparison (~25 min on 8 cores); interruptible, continue with --resume
 uv run kagome-vqe study configs/studies/graph_hva_optimizer_representative.toml
 
-# full profile: estimate first, then run in bounded chunks
-uv run kagome-vqe study configs/studies/graph_hva_optimizer_full.toml --dry-run
-uv run kagome-vqe study configs/studies/graph_hva_optimizer_full.toml --time-limit 120
-uv run kagome-vqe study configs/studies/graph_hva_optimizer_full.toml \
-    --resume results/<timestamp>-graph_hva_opt_full --time-limit 120   # repeat until done
 
 # regenerate tables/figures; inspect or reuse a run
 uv run kagome-vqe study-summary results/<timestamp>-<study>
@@ -247,13 +231,12 @@ report are only comparable within one machine and load.
 * **Hyperparameters** come from a one-seed pilot on one configuration (`p = 2`, statevector)
   and are reused for finite shots and other `p`; they are not tuned per condition. The SPSA
   perturbation `c = 0.1` is shared by both SPSA-type methods.
-* **L-BFGS-B was not run with finite shots** in the limited comparison; the full profile has a
-  diagnostic arm (`eps = 0.1`).
+* **L-BFGS-B was not run with finite shots.**
 * **Finite-shot noise only.** No gate, decoherence or readout noise and no mitigation; physical
   noise is a separate, later study (M2 for `graph_hva`), which can start from the saved
   optimised parameters (`kagome-vqe params`).
 * **H0 on** was not part of the limited comparison.
 * **Wall times** depend on machine load; they are comparable within a study only.
-* Follow-ups: run the full profile; test SPSA step control (observation 4); add parameter-shift
+* Follow-ups: test SPSA step control (observation 4; done in the noisy study); add parameter-shift
   gradients (`2K` energies) once `N_theta` makes their cost comparable; repeat on a second
   lattice (e.g. the PRB 106 20-site patch) before drawing general conclusions.

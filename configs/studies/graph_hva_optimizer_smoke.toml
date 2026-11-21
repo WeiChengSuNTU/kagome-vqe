@@ -4,8 +4,8 @@
 #   uv run kagome-vqe study configs/studies/graph_hva_optimizer_smoke.toml --dry-run
 #   uv run kagome-vqe study configs/studies/graph_hva_optimizer_smoke.toml
 #
-# The optimiser blocks are the same as in graph_hva_optimizer_full.toml; only the matrix and
-# the budgets are smaller.
+# The optimiser blocks are the same as in graph_hva_optimizer_representative.toml; only the
+# matrix and the budgets are smaller.
 name = "graph_hva_opt_smoke"
 description = """
 Smoke test: PRB 105 2x6 rectangle (open), graph_hva p = 1 without H0 (16 parameters), one
